@@ -670,48 +670,111 @@
 
 <style id="portal-srl-landing-mobile-fix">
 @media (max-width:576px) {
-  #app > header.w-full.px-4.py-3.md\:px-8,
-  #app header.w-full.px-4.py-3 {
-    padding: .45rem .65rem !important;
-    gap: .5rem !important;
-    flex-wrap: wrap !important;
-  }
-  #app > header.w-full.px-4.py-3.md\:px-8 nav,
-  #app header.w-full.px-4.py-3 nav,
-  #app > header.w-full.px-4.py-3.md\:px-8 .nav,
-  #app header.w-full.px-4.py-3 .nav {
+  /* Landing navigation: one horizontal scroll row; desktop rules remain untouched. */
+  #app > header.landing-top-nav,
+  #app header.landing-top-nav {
     display:flex !important;
-    flex-wrap:wrap !important;
-    justify-content:center !important;
-    gap:.4rem !important;
+    flex-wrap:nowrap !important;
+    justify-content:flex-start !important;
+    align-items:center !important;
+    gap:.5rem !important;
     width:100% !important;
     max-width:100% !important;
+    padding:.3rem .5rem !important;
+    overflow-x:auto !important;
+    overflow-y:hidden !important;
+    overscroll-behavior-x:contain;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:none;
+    scroll-padding-inline:.5rem;
   }
-  #app > header.w-full.px-4.py-3.md\:px-8 nav a,
-  #app > header.w-full.px-4.py-3.md\:px-8 nav button,
-  #app header.w-full.px-4.py-3 nav a,
-  #app header.w-full.px-4.py-3 nav button {
-    font-size:.72rem !important;
-    padding:.45rem .7rem !important;
+  #app header.landing-top-nav::-webkit-scrollbar { display:none; }
+  #app header.landing-top-nav > button {
+    flex:0 0 auto !important;
+    white-space:nowrap !important;
+    font-size:.68rem !important;
+    padding:.45rem .65rem !important;
     line-height:1.2 !important;
-    white-space:normal !important;
-    max-width:100% !important;
+    max-width:none !important;
   }
-  #srl-global-upi-header .srl-header-inner {
-    width:calc(100% - 16px) !important;
-    min-height:58px !important;
-    padding:4px 0 !important;
-    gap:7px !important;
+  #app header.landing-top-nav .landing-top-nav-actions {
+    display:flex !important;
+    flex:0 0 auto !important;
+    flex-wrap:nowrap !important;
+    justify-content:flex-start !important;
+    gap:.45rem !important;
+    width:auto !important;
+    max-width:none !important;
   }
-  #srl-global-upi-header { min-height:58px !important; }
-  #srl-global-upi-header .srl-upi-logo { width:clamp(108px,35vw,145px) !important; height:34px !important; max-width:40vw !important; }
-  #srl-global-upi-header .srl-brand { font-size:clamp(10px,2.8vw,12px) !important; }
-  #srl-global-upi-header .srl-brand-subtitle { font-size:8px !important; margin-top:1px !important; }
+  #app header.landing-top-nav .landing-top-nav-actions button {
+    flex:0 0 auto !important;
+    white-space:nowrap !important;
+    font-size:.68rem !important;
+    padding:.45rem .65rem !important;
+    line-height:1.2 !important;
+    max-width:none !important;
+  }
+
+  /* Compact landing hero so the main call-to-action sits higher on phones. */
+  #app main.flex-grow.flex-col.items-center {
+    min-height:calc(100svh - 58px) !important;
+    min-height:calc(100vh - 58px) !important;
+    padding:.45rem .7rem 1rem !important;
+  }
+  #app main.flex-grow.flex-col.items-center > .max-w-3xl {
+    margin-top:0 !important;
+    margin-bottom:0 !important;
+    width:100% !important;
+    max-width:42rem !important;
+  }
+  #app main.flex-grow.flex-col.items-center .max-w-3xl > div:first-child {
+    margin-bottom:.35rem !important;
+  }
+  #app main.flex-grow.flex-col.items-center img[alt="Logo SRL"] {
+    width:clamp(104px, 29vw, 132px) !important;
+    max-height:128px !important;
+    object-fit:contain !important;
+  }
+  #app main.flex-grow.flex-col.items-center h1 {
+    font-size:clamp(2rem, 8vw, 2.55rem) !important;
+    line-height:1.05 !important;
+    margin-top:.15rem !important;
+    margin-bottom:.2rem !important;
+    padding-top:.1rem !important;
+    padding-bottom:.1rem !important;
+  }
+  #app main.flex-grow.flex-col.items-center h2 {
+    font-size:clamp(.82rem, 3.6vw, 1rem) !important;
+    line-height:1.25 !important;
+    margin-top:.15rem !important;
+    margin-bottom:.55rem !important;
+    padding-left:.25rem !important;
+    padding-right:.25rem !important;
+    gap:.35rem !important;
+  }
+  #app main.flex-grow.flex-col.items-center p {
+    font-size:clamp(.72rem, 3.1vw, .82rem) !important;
+    line-height:1.4 !important;
+    padding:.7rem .8rem !important;
+    margin-top:.3rem !important;
+    margin-bottom:.65rem !important;
+    border-radius:1rem !important;
+  }
+  #app main.flex-grow.flex-col.items-center .max-w-3xl > div:last-child {
+    margin-top:.45rem !important;
+    padding-left:0 !important;
+    padding-right:0 !important;
+    gap:.5rem !important;
+  }
   #app button[onclick="openLoginPopup()"] {
     width:100% !important;
     min-height:48px !important;
+    padding:.75rem 1rem !important;
     border-radius:14px !important;
     box-sizing:border-box !important;
+    font-size:clamp(.95rem, 4vw, 1.12rem) !important;
+    line-height:1.2 !important;
+    white-space:normal !important;
   }
 }
 </style>
@@ -2619,11 +2682,11 @@
         // LANDING PAGE
         function renderLanding() {
             return `
-                <header class="w-full px-4 py-3 md:px-8 flex justify-between items-center relative z-20 gap-3">
+                <header class="landing-top-nav w-full px-4 py-3 md:px-8 flex justify-between items-center relative z-20 gap-3">
                     <button type="button" onclick="openDeveloperProfileModal()" aria-haspopup="dialog" aria-controls="developer-profile-modal" class="text-[11px] md:text-sm font-bold text-slate-600 hover:text-emerald-700 flex items-center gap-2 bg-white/90 px-3 md:px-5 py-2.5 rounded-full shadow-md border border-emerald-100 backdrop-blur-sm transition-all hover:shadow-lg">
                         <i class="fa-solid fa-id-card text-emerald-600" aria-hidden="true"></i><span>Profil Pengembang</span>
                     </button>
-                    <div class="flex items-center justify-end gap-2 sm:gap-3">
+                    <div class="landing-top-nav-actions flex items-center justify-end gap-2 sm:gap-3">
                         <button type="button" onclick="openVideoPanduanModal()" aria-haspopup="dialog" aria-controls="video-panduan-modal" class="text-[11px] sm:text-xs md:text-sm font-extrabold text-rose-700 hover:text-rose-800 flex items-center gap-1.5 sm:gap-2 bg-white/95 px-3 sm:px-4 md:px-5 py-2.5 rounded-full shadow-md border border-rose-100 backdrop-blur-sm transition-all hover:bg-rose-50 hover:shadow-lg whitespace-nowrap">
                             <i class="fa-brands fa-youtube text-rose-600 text-base sm:text-lg"></i><span>Video Panduan</span>
                         </button>
@@ -5174,7 +5237,7 @@ function renderStudentActivityForm(actId) {
         }
 
         // LAPORAN GURU: ringkasan capaian, filter, detail murid, dan cetak PDF.
-        const reportState = { kelas:'all', aktivitas:'all', kelompok:'all', jenis:'rekap', tab:'ringkasan', selectedStudentId:1, page:1, pageSize:10 };
+        const reportState = { kelas:'all', aktivitas:'all', kelompok:'all', jenis:'rekap', selectedStudentId:1, page:1, pageSize:10 };
         let reportDataCache = { status:'idle', jumlahMurid:{total:0,lakiLaki:0,perempuan:0}, distribusiCapaian:{mahirCount:0,cakapCount:0,berkembangCount:0}, rataRataDimensi:{penalaranKritis:0,kreativitas:0,kolaborasi:0}, listMurid:[] };
         let reportFetchSignature = '';
         async function refreshTeacherReportData(force) {
@@ -5224,7 +5287,6 @@ function renderStudentActivityForm(actId) {
             return 0;
         }
         function reportAvatar(s) { return s.avatar ? `<img src="${escapeHTML(s.avatar)}" class="w-8 h-8 rounded-full object-cover border" alt="">` : `<span class="w-8 h-8 rounded-full bg-sky-100 text-sky-700 font-black flex items-center justify-center">${escapeHTML(String(s.nama||'M').split(' ').map(x=>x[0]).slice(0,2).join(''))}</span>`; }
-        function setReportTab(tab) { reportState.tab=tab; renderTeacherBoard(); }
         function selectReportStudent(id) { reportState.selectedStudentId=String(id); renderTeacherBoard(); }
         function exportTeacherReport() { const t=document.title; document.title='Laporan Capaian Aktivitas Murid - PORTAL-SRL'; window.print(); document.title=t; }
         function exportStudentDevelopmentReport() {
@@ -5294,7 +5356,7 @@ function renderStudentActivityForm(actId) {
               <section class="grid grid-cols-1 xl:grid-cols-12 gap-3">
                 <div class="xl:col-span-8 space-y-3 min-w-0">
                   <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div class="rounded-xl border border-sky-100 bg-sky-50 p-4"><div class="flex items-center gap-3"><span class="w-12 h-12 rounded-xl bg-violet-500 text-white flex items-center justify-center text-xl"><i class="fa-solid fa-users"></i></span><div><p class="text-[11px] font-bold">Jumlah Murid</p><p class="text-2xl font-black">${jm.total||0}</p></div></div><div class="grid grid-cols-2 gap-2 mt-3 text-[10px]"><div class="bg-white rounded-lg border p-2">Laki-laki<b class="block text-base">${jm.lakiLaki||0}</b></div><div class="bg-white rounded-lg border p-2">Perempuan<b class="block text-base">${jm.perempuan||0}</b></div></div></div>
+                    <div class="rounded-xl border border-sky-100 bg-sky-50 p-4"><div class="flex items-center gap-3"><span class="w-12 h-12 rounded-xl bg-violet-500 text-white flex items-center justify-center text-xl"><i class="fa-solid fa-users"></i></span><div><p class="text-[11px] font-bold">Jumlah Murid</p><p class="text-2xl font-black">${jm.total||0}</p></div></div><div class="grid grid-cols-2 gap-2 mt-3 text-[10px]"><div class="bg-white rounded-lg border p-2">Laki-laki<b id="countLaki" class="block text-base">${jm.lakiLaki||0}</b></div><div class="bg-white rounded-lg border p-2">Perempuan<b id="countPerempuan" class="block text-base">${jm.perempuan||0}</b></div></div></div>
                     <div class="rounded-xl border border-sky-100 bg-white p-4"><p class="text-xs font-black mb-2">Distribusi Capaian Murid</p><div class="space-y-2 text-[11px]"><p>Mahir: <b>${dist.mahirCount||0}</b></p><p>Cakap: <b>${dist.cakapCount||0}</b></p><p>Berkembang: <b>${dist.berkembangCount||0}</b></p></div></div>
                     <div class="rounded-xl border border-sky-100 bg-white p-4"><p class="text-xs font-black mb-3">Rekap Capaian per Dimensi APK</p>${dims.map(([k,l])=>`<div class="mb-3"><div class="flex justify-between text-[10px] mb-1"><span>${l}</span><b>${avg[k]||0}%</b></div><div class="h-3 bg-slate-100 rounded-full overflow-hidden"><div class="h-full bg-emerald-500 rounded-full" style="width:${Math.max(0,Math.min(100,Number(avg[k])||0))}%"></div></div></div>`).join('')}</div>
                   </div>
