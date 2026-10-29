@@ -1487,6 +1487,8 @@
                 }
                 state.student.currentSection = section;
                 renderStudentBoard();
+                // Sinkronkan nama teman secara otomatis saat aktivitas/penilaian teman dibuka.
+                refreshStudentPeerList(section);
                 return;
             }
 
@@ -3437,7 +3439,7 @@
                 <div class="flex h-12 w-12 items-center justify-center rounded-full ${isSelf?'bg-violet-600':'bg-amber-500'} text-2xl font-black text-white">${isSelf?3:2}</div>
                 <div class="flex h-14 w-14 items-center justify-center text-5xl ${isSelf?'text-violet-500':'text-amber-500'}"><i class="fa-solid ${isSelf?'fa-user-check':'fa-users'}"></i></div>
                 <div class="min-w-0 space-y-3 w-full"><div><h3 class="text-xl font-black text-slate-950">${title}</h3><p class="mt-1 text-sm text-slate-700">${intro}</p></div>
-                ${!isSelf ? `<div><label class="block text-sm font-bold text-slate-800 mb-1" for="${actId}-peer-target">Teman yang dinilai</label><select id="${actId}-peer-target" onchange="updateStudentAnswerLocally('${actId}_peer_target',this.value)" class="w-full rounded-xl border border-amber-200 bg-white p-3 text-sm"><option value="">Pilih teman sekelompok</option>${getStudentPeerOptions(actId)}</select></div>` : ''}
+                ${!isSelf ? `<div><label class="block text-sm font-bold text-slate-800 mb-1" for="${actId}-peer-target">Teman yang dinilai</label><select id="${actId}-peer-target" data-peer-select="true" onchange="updateStudentAnswerLocally('${actId}_peer_target',this.value)" class="w-full rounded-xl border border-amber-200 bg-white p-3 text-sm"><option value="">Pilih teman sekelompok</option>${getStudentPeerOptions(actId)}</select></div>` : ''}
                 <div class="space-y-3">${items.map((item,i)=>{
                     const key = `${prefix}_${item.key}`;
                     const value = (state.student.answers||{})[key] || '';
@@ -3462,7 +3464,7 @@
                 ? state.student.groupsByMeeting[meetingId] : null;
             const myGroupRow = meetingRows && meetingRows.find(g => String(g.nisn || '') === myNisn);
             return source.filter(s => {
-                const nisn = String(s.nisn || s.ID_NISN || '').trim();
+                const nisn = String(s.nisn || s.ID_NISN || s.id || '').trim();
                 const name = String(s.nama || s.NAMA || s.name || '').trim();
                 const kelas = normalizeKelas(s.kelas || s.KELAS || '');
                 if (!name || (myNisn ? nisn === myNisn : name.toLowerCase() === myName) || (myClass && kelas && kelas !== myClass)) return false;
@@ -3478,15 +3480,67 @@
 
         function getStudentPeerOptions(actId) {
             const current = String((state.student.answers || {})[`${actId}_peer_target`] || '');
-            const classmates = getActualStudentClassmates();
+            const classmates = getActualStudentClassmates(actId);
             if (!classmates.length) {
-                return `<option value="" disabled>Data teman sekelas belum tersedia di Kelola Kelas</option>`;
+                return `<option value="" disabled>Belum ada teman yang memenuhi filter kelas/kelompok</option>`;
             }
             return classmates.map(s => {
                 const name = String(s.nama || s.NAMA || s.name || '').trim();
                 const nisn = String(s.nisn || s.ID_NISN || '').trim();
                 return `<option value="${escapeHTML(nisn || name)}" ${current === (nisn || name) || current === name ? 'selected' : ''}>${escapeHTML(name)}</option>`;
             }).join('');
+        }
+
+
+        function getStudentPeerMeetingId(actId) {
+            const id = String(actId || '').toLowerCase();
+            const act4Meeting = String((state.student.answers || {}).act4_peer_meeting || 'pertemuan2');
+            return /act1|aktivitas.?1|act2|aktivitas.?2/.test(id) ? 'pertemuan1'
+                : /act4b|act4_lanjutan/.test(id) ? 'pertemuan3'
+                : /act4|aktivitas.?4/.test(id) ? act4Meeting
+                : /act3|aktivitas.?3/.test(id) ? 'pertemuan2'
+                : /act5|aktivitas.?5/.test(id) ? 'pertemuan3' : '';
+        }
+
+        function getStudentPeerGroupForActivity(actId) {
+            const meetingId = getStudentPeerMeetingId(actId);
+            const rows = meetingId && state.student.groupsByMeeting
+                ? state.student.groupsByMeeting[meetingId] : null;
+            if (!Array.isArray(rows)) return '';
+            const myNisn = String(state.student.nisn || '').trim();
+            const mine = rows.find(g => String(g.nisn || g.studentId || '') === myNisn);
+            return mine ? String(mine.kelompokName || mine.kelompok || '').trim() : '';
+        }
+
+        // Selalu ambil ulang daftar teman ketika aktivitas yang memuat peer-assessment dibuka.
+        // Backend mengecualikan murid login; hasil baru hanya diterapkan jika aktivitas masih aktif.
+        async function refreshStudentPeerList(actId) {
+            if (!state.student || !state.student.nisn || !/^act[1-5]$/.test(String(actId || ''))) return;
+            try {
+                const result = await apiCall('getDaftarTemanSebaya', {
+                    kelas: state.student.kelas || '',
+                    idMuridLogin: state.student.nisn,
+                    idKelompok: getStudentPeerGroupForActivity(actId)
+                });
+                if (!result || result.status !== 'success' || !Array.isArray(result.students)) {
+                    console.warn('Daftar teman sebaya belum dapat dimuat:', result && result.message);
+                    return;
+                }
+                const myId = String(state.student.nisn || '').trim();
+                const myName = String(state.student.name || '').trim().toLowerCase();
+                // Perlindungan kedua di frontend: akun aktif tidak boleh masuk ke daftar pilihan.
+                state.student.peers = result.students.filter(s => {
+                    const id = String(s.nisn || s.id || '').trim();
+                    const name = String(s.nama || s.name || '').trim().toLowerCase();
+                    return !(id && id === myId) && !(name && name === myName);
+                });
+                state.student.peersLoaded = true;
+                if (state.currentView === 'murid_board' && state.student.currentSection === actId) {
+                    renderStudentBoard();
+                }
+            } catch (error) {
+                console.warn('Gagal menyinkronkan daftar teman sebaya:', error);
+            }
         }
 
         function updateStudentAPKChoice(actId, kind, itemKey, value) {
