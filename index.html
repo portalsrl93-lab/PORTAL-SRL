@@ -1478,13 +1478,13 @@
             'getStimulasiContent', 'getRoomLearningContent', 'getPublishedPengantar',
             'getRestrictionStatus', 'getDashboardStats', 'getTeacherSettings', 'getPengaturan',
             'getGuideResources', 'getStudentFeedback', 'getStudentAPKProfile', 'getTeacherEvaluation',
-            'getTeacherData', 'getInitialAppData', 'getStudentData', 'getUserStateData', 'fetchInitialData'
+            'getTeacherData', 'getTeacherFinalCapaian', 'getInitialAppData', 'getStudentData', 'getUserStateData', 'fetchInitialData'
         ]);
         const API_SESSION_MUTATING_ACTIONS = new Set([
             'saveStudentSubmission', 'addTeacherStudent', 'addStudent', 'updateTeacherStudent', 'updateStudent',
             'saveTeacherClass', 'savePengaturan', 'saveTeacherSettings', 'saveStimulasiContent',
             'saveRoomLearningContent', 'saveRestrictionStatus', 'saveTeacherEvaluation',
-            'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'savePortfolioAssessment',
+            'saveTeacherActivityAssessment', 'saveTeacherFinalCapaian', 'saveTeacherFeedback', 'savePortfolioAssessment',
             'uploadFileToDrive', 'uploadGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile', 'saveStudentGroups'
         ]);
         function getApiSessionCacheKey(action, payload) {
@@ -2307,6 +2307,16 @@
                 teacherActivityState.tab = 'Bukti Belajar';
             }
             renderTeacherBoard();
+            // Muat ulang konten dari Google Sheets setiap kali guru membuka editor terkait.
+            if (menuKey === 'stimulasi') {
+                refreshStimulasiContent().then(function(ok) {
+                    if (ok && state.currentView === 'guru_board' && state.teacher.currentMenu === 'stimulasi') renderTeacherBoard();
+                });
+            } else if (menuKey === 'ruang_belajar') {
+                refreshRoomLearningContent().then(function() {
+                    if (state.currentView === 'guru_board' && state.teacher.currentMenu === 'ruang_belajar') renderTeacherBoard();
+                });
+            }
         }
 
         function selectStudentDetail(studentId) {
@@ -3586,7 +3596,7 @@ function renderStudentActivityForm(actId) {
         async function refreshStimulasiContent() {
             try {
                 // Selalu baca sumber bersama dari backend; jangan mengandalkan state/localStorage.
-                const res = await apiCall('getStimulasiContent');
+                const res = await apiCall('getStimulasiData', { forceRefresh: true, teacherClass: state.teacherAuth?.kelas || state.student?.kelas || '' });
                 if (!res || res.status !== 'success') {
                     console.warn('Konten Stimulasi belum berhasil dimuat:', res && res.message ? res.message : 'Respons server tidak valid.');
                     return false;
@@ -3604,6 +3614,7 @@ function renderStudentActivityForm(actId) {
                 if (state.student && state.student.currentSection === 'stimulasi') {
                     renderStudentBoard();
                 }
+                if (state.currentView === 'guru_board' && state.teacher.currentMenu === 'stimulasi') renderTeacherBoard();
                 return true;
             } catch (e) {
                 console.error('Gagal memuat konten Stimulasi dari backend.', e);
@@ -3613,13 +3624,14 @@ function renderStudentActivityForm(actId) {
 
         async function refreshRoomLearningContent() {
             try {
-                const res = await apiCall('getRoomLearningContent');
+                const res = await apiCall('getRuangBelajarData', { forceRefresh: true, teacherClass: state.teacherAuth?.kelas || state.student?.kelas || '' });
                 if (res && res.status === 'success') {
                     state.teacherSettings.roomReadings = Array.isArray(res.roomReadings) ? res.roomReadings : [];
                     state.teacherSettings.roomVideos = Array.isArray(res.roomVideos) ? res.roomVideos : [];
                     state.teacherSettings.roomVideoPublished = Array.isArray(res.roomVideoPublished) ? res.roomVideoPublished : [];
                     if (res.unlockedActivities && typeof res.unlockedActivities === 'object') state.teacherSettings.unlockedActivities = { ...state.teacherSettings.unlockedActivities, ...res.unlockedActivities };
                     if (state.currentView === 'murid_board' && state.student.currentSection === 'ruang_belajar') renderStudentBoard();
+                    if (state.currentView === 'guru_board' && state.teacher.currentMenu === 'ruang_belajar') renderTeacherBoard();
                 }
             } catch (e) { console.warn('Konten Ruang Belajar belum berhasil dimuat dari server.', e); }
         }
@@ -4317,7 +4329,101 @@ function renderStudentActivityForm(actId) {
             const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8;'});
             const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`PORTAL-SRL_${kind}_Topik2.csv`; a.click(); URL.revokeObjectURL(url);
         }
+
+        // Dashboard terpadu Rekap Penilaian: lima aktivitas selalu tampil berdampingan.
+        let teacherFinalCapaianLoaded = false;
+        function teacherFinalEvidenceValue(sub) {
+            if (!sub) return '';
+            const candidates = [sub.link_karya_padlet, sub.jawaban_teks_1, sub.jawaban_teks_2,
+                sub.lkpd_drive_url, sub.photo_drive_url, sub.answers?.lkpd_url, sub.answers?.photo_url];
+            return candidates.find(v => v !== undefined && v !== null && String(v).trim()) || '';
+        }
+        function teacherFinalParse(value) {
+            if (value === undefined || value === null || value === '') return null;
+            if (typeof value === 'string') { try { return JSON.parse(value); } catch(e) { return value; } }
+            return value;
+        }
+        function teacherFinalHasValue(value) {
+            if (value === undefined || value === null || value === '') return false;
+            if (typeof value === 'string') return !!value.trim();
+            if (Array.isArray(value)) return value.length > 0;
+            if (typeof value === 'object') return Object.values(value).some(teacherFinalHasValue);
+            return true;
+        }
+        function teacherFinalCheck(ok, label) {
+            return `<span title="${label}" class="inline-flex min-w-[25px] items-center justify-center rounded-md px-1.5 py-1 text-[11px] font-black ${ok?'bg-emerald-100 text-emerald-800':'bg-slate-100 text-slate-500'}">${ok?'✓':'✗'}</span>`;
+        }
+        function teacherFinalOpenDetail(studentId, actId) {
+            const student = teacherActivityStudents().find(s => String(s.id) === String(studentId));
+            if (!student) return;
+            const sub = teacherActivitySubmission(student, actId) || {};
+            const answers = sub.answers || sub.data || {};
+            const evidence = teacherFinalEvidenceValue(sub);
+            const self = teacherFinalParse(sub.self_assessment ?? sub.selfAssessment ?? sub.self ?? answers.self_assessment ?? answers[`${actId}_self`]);
+            const peer = teacherFinalParse(sub.peer_assessment ?? sub.peerAssessment ?? sub.peer ?? answers.peer_assessment ?? answers[`${actId}_peer`]);
+            const fmt = value => {
+                if (value === null || value === undefined || value === '') return '<p class="text-sm italic text-slate-400">Belum ada respons.</p>';
+                if (typeof value === 'object') return `<pre class="whitespace-pre-wrap break-words rounded-xl bg-slate-50 p-3 text-xs leading-relaxed">${escapeHTML(JSON.stringify(value, null, 2))}</pre>`;
+                const str = String(value);
+                const urlMatch = str.match(/https?:\/\/[^\s"'<>]+/);
+                if (urlMatch) return `<a class="break-all text-sky-700 underline" href="${escapeHTML(urlMatch[0])}" target="_blank" rel="noopener">Buka bukti / tautan</a><pre class="mt-2 whitespace-pre-wrap break-words rounded-xl bg-slate-50 p-3 text-xs">${escapeHTML(str)}</pre>`;
+                return `<p class="whitespace-pre-wrap break-words rounded-xl bg-slate-50 p-3 text-sm">${escapeHTML(str)}</p>`;
+            };
+            const modal = document.getElementById('modal-container');
+            if (!modal) { showModal(`Detail ${actId.toUpperCase()} · ${student.nama}`, `Bukti belajar: ${evidence || 'Belum ada'}\nPenilaian diri: ${JSON.stringify(self || 'Belum ada')}\nPenilaian teman: ${JSON.stringify(peer || 'Belum ada')}`, 'info'); return; }
+            modal.innerHTML = `<div class="modal-backdrop fixed inset-0 z-[250] flex items-center justify-center p-3" onclick="if(event.target===this){this.innerHTML='';this.classList.add('hidden')}"><section class="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-2xl bg-white p-5 shadow-2xl"><div class="flex items-start justify-between gap-3"><div><p class="text-[10px] font-black uppercase tracking-wider text-emerald-700">${actId.toUpperCase()} · DETAIL PENGUMPULAN</p><h2 class="mt-1 text-xl font-black text-slate-900">${escapeHTML(student.nama)}</h2><p class="text-xs text-slate-500">${escapeHTML(student.kelas)} · ${escapeHTML(student.nisn || 'NISN tidak tersedia')}</p></div><button onclick="document.getElementById('modal-container').innerHTML=''" class="rounded-lg bg-slate-100 px-3 py-2 font-black text-slate-600">✕</button></div><div class="mt-4 grid gap-4 md:grid-cols-3"><article class="rounded-xl border p-3"><h3 class="mb-2 font-black text-sm">Bukti Belajar</h3>${evidence ? fmt(evidence) : fmt(null)}</article><article class="rounded-xl border p-3"><h3 class="mb-2 font-black text-sm">Penilaian Diri</h3>${fmt(self)}</article><article class="rounded-xl border p-3"><h3 class="mb-2 font-black text-sm">Penilaian Teman Sebaya</h3>${fmt(peer)}</article></div><p class="mt-4 text-[11px] text-slate-500">Data ditampilkan dari kiriman murid yang tersedia pada data Portal Guru saat ini.</p></section></div>`;
+            modal.classList.remove('hidden');
+        }
+        function teacherFinalSave(studentId) {
+            const student = teacherActivityStudents().find(s => String(s.id) === String(studentId));
+            const select = document.getElementById(`teacher-final-level-${studentId}`);
+            const level = select ? select.value : '';
+            if (!student || !student.nisn) { showModal('NISN belum tersedia','Data murid tidak memiliki NISN sehingga capaian tidak dapat disimpan.','warning'); return; }
+            if (!['BERKEMBANG','CAKAP','MAHIR'].includes(level)) { showModal('Capaian belum dipilih','Pilih BERKEMBANG, CAKAP, atau MAHIR terlebih dahulu.','warning'); return; }
+            const button = document.getElementById(`teacher-final-save-${studentId}`);
+            if (button) { button.disabled = true; button.textContent = 'Menyimpan...'; }
+            apiCall('saveTeacherFinalCapaian',{nisn:student.nisn,student_id:student.id,nama:student.nama,kategori:'TOPIK2',capaian:level})
+              .then(res => {
+                if (!res || res.status !== 'success') throw new Error(res?.message || 'Penyimpanan gagal.');
+                state.teacherDataCache.finalCapaian = state.teacherDataCache.finalCapaian || {};
+                state.teacherDataCache.finalCapaian[student.nisn] = level;
+                showModal('Penilaian tersimpan',`Capaian akhir ${student.nama} berhasil disimpan.`, 'success');
+                renderTeacherBoard();
+              }).catch(err => showModal('Gagal menyimpan capaian',err.message || 'Periksa koneksi dan konfigurasi backend.','error'))
+              .finally(()=>{ if(button){button.disabled=false;button.textContent='Simpan Penilaian';} });
+        }
+        function renderTeacherFinalRecap() {
+            if (!teacherFinalCapaianLoaded) {
+                teacherFinalCapaianLoaded = true;
+                apiCall('getTeacherFinalCapaian',{}).then(res => {
+                    if (res && res.status === 'success') {
+                        state.teacherDataCache.finalCapaian = res.data || {};
+                        renderTeacherBoard();
+                    }
+                }).catch(() => {});
+            }
+            const students = teacherAssessmentStudents();
+            const acts = [
+                ['act1','Aktivitas 1'],['act2','Aktivitas 2'],['act3','Aktivitas 3'],['act4','Aktivitas 4'],['act5','Aktivitas 5']
+            ];
+            const finals = state.teacherDataCache.finalCapaian || {};
+            const rows = students.map((student, index) => {
+                const cells = acts.map(([actId, actName]) => {
+                    const sub = teacherActivitySubmission(student, actId) || {};
+                    const answers = sub.answers || sub.data || {};
+                    const evidence = teacherFinalHasValue(teacherFinalEvidenceValue(sub));
+                    const self = teacherFinalHasValue(teacherFinalParse(sub.self_assessment ?? sub.selfAssessment ?? sub.self ?? answers.self_assessment ?? answers[`${actId}_self`]));
+                    const peer = teacherFinalHasValue(teacherFinalParse(sub.peer_assessment ?? sub.peerAssessment ?? sub.peer ?? answers.peer_assessment ?? answers[`${actId}_peer`]));
+                    return `<td class="border border-slate-200 p-2 align-top"><div class="min-w-[125px]"><div class="mb-2 text-[10px] font-black text-slate-600">${actName}</div><div class="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1 text-[10px]"><span>Bukti belajar</span>${teacherFinalCheck(evidence,'Bukti belajar')}<span>Penilaian diri</span>${teacherFinalCheck(self,'Penilaian diri')}<span>Teman sebaya</span>${teacherFinalCheck(peer,'Penilaian teman sebaya')}</div><button onclick="teacherFinalOpenDetail('${String(student.id).replace(/'/g,"\\'")}','${actId}')" class="mt-2 w-full rounded-lg border border-sky-200 bg-sky-50 px-2 py-1.5 text-[10px] font-black text-sky-700 hover:bg-sky-100">Detail / Pratinjau</button></div></td>`;
+                }).join('');
+                const current = finals[student.nisn] || '';
+                return `<tr class="border-b border-slate-100"><td class="sticky left-0 z-10 border border-slate-200 bg-white p-3 align-top"><div class="font-black text-slate-800">${index+1}. ${escapeHTML(student.nama)}</div><div class="mt-1 text-[10px] text-slate-500">${escapeHTML(student.kelas)} · ${escapeHTML(student.kelompok || '')}</div><div class="text-[10px] text-slate-400">${escapeHTML(student.nisn || 'NISN tidak tersedia')}</div><label class="mt-3 block text-[10px] font-black text-slate-600">CAPAIAN AKHIR<select id="teacher-final-level-${student.id}" class="mt-1 w-full rounded-lg border border-emerald-200 bg-white p-2 text-xs font-bold"><option value="">Pilih capaian</option>${['BERKEMBANG','CAKAP','MAHIR'].map(level=>`<option value="${level}" ${current===level?'selected':''}>${level}</option>`).join('')}</select></label><button id="teacher-final-save-${student.id}" onclick="teacherFinalSave('${String(student.id).replace(/'/g,"\\'")}')" class="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black text-white hover:bg-emerald-700">Simpan Penilaian</button></td>${cells}</tr>`;
+            }).join('');
+            return `<div class="space-y-4 text-slate-800">${teacherPortfolioBanner('ASESMEN TOPIK 2','Rekap Penilaian','Pantau kelengkapan bukti belajar, penilaian diri, dan penilaian teman sebaya untuk Aktivitas 1 sampai 5 dalam satu matriks. Tetapkan capaian akhir setelah menelaah bukti murid.','fa-table-list',['Matriks Aktivitas 1–5','Detail Bukti Belajar','Capaian Perkembangan'])}<section class="rounded-2xl border border-emerald-100 bg-white p-4"><div class="flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-lg font-black text-emerald-950">Matriks Kelengkapan Tugas Murid</h2><p class="mt-1 text-xs text-slate-500">✓ hijau = komponen terdeteksi · ✗ abu-abu = data belum terdeteksi. Klik Detail / Pratinjau untuk membaca kiriman.</p></div><div class="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800">${students.length} murid</div></div><div class="mt-4 overflow-x-auto rounded-xl border border-slate-200"><table class="w-full min-w-[1150px] border-collapse text-left text-xs"><thead><tr class="bg-slate-100"><th rowspan="2" class="sticky left-0 z-20 min-w-[210px] border border-slate-200 bg-slate-100 p-3">Nama Murid / Capaian Akhir</th><th colspan="5" class="border border-slate-200 p-2 text-center">KELENGKAPAN PER AKTIVITAS</th></tr><tr class="bg-emerald-50">${acts.map(a=>`<th class="border border-slate-200 p-2 text-center">${a[1]}</th>`).join('')}</tr></thead><tbody>${rows || '<tr><td colspan="6" class="p-8 text-center text-slate-500">Belum ada data murid pada kelas tanggung jawab ini.</td></tr>'}</tbody></table></div><div class="mt-3 grid gap-2 text-[11px] text-slate-500 sm:grid-cols-3"><p>✓ Bukti belajar: tautan/file atau jawaban bukti terdeteksi.</p><p>✓ Penilaian diri: respons self-assessment terdeteksi.</p><p>✓ Teman sebaya: respons peer-assessment terdeteksi.</p></div><p class="mt-3 rounded-xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-900"><b>Catatan penilaian:</b> kelengkapan tugas merupakan informasi pendukung. Tetapkan capaian berdasarkan telaah mutu bukti dan deskriptor, bukan semata-mata jumlah ceklis.</p></section></div>`;
+        }
+
         function renderTeacherAssessmentView(menu) {
+            if (menu === 'penilaian_rekap') return renderTeacherFinalRecap();
             const store=teacherAssessmentEnsureStore();
             const all=teacherActivityStudents();
             const students=teacherAssessmentStudents();
