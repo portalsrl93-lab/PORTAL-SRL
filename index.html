@@ -1077,6 +1077,8 @@
                     refleksi_akhir: false
                 },
                 answers: {},
+                peers: [],
+                peersLoaded: false,
                 apkProfile: { status: 'idle', subdimensions: {} }
             },
 
@@ -1414,7 +1416,7 @@
             activeApiRequests++;
             showSpinner();
             try {
-                const protectedTeacherActions = ['getTeacherData', 'addTeacherStudent', 'updateTeacherStudent', 'saveTeacherClass', 'saveTeacherSettings', 'saveRoomLearningContent', 'saveStimulasiContent', 'saveTeacherEvaluation', 'savePortfolioAssessment', 'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'getGuideResources', 'uploadGuideResource', 'getTeacherNotifications', 'markTeacherNotificationRead'];
+                const protectedTeacherActions = ['getTeacherData', 'getTeacherSchoolProfile', 'saveTeacherSchoolProfile', 'addTeacherStudent', 'updateTeacherStudent', 'saveTeacherClass', 'saveTeacherSettings', 'saveRoomLearningContent', 'saveStimulasiContent', 'saveTeacherEvaluation', 'savePortfolioAssessment', 'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'getGuideResources', 'uploadGuideResource', 'getTeacherNotifications', 'markTeacherNotificationRead'];
                 const requestPayload = { ...payload };
                 if (protectedTeacherActions.includes(action) && state.teacherAuth && state.teacherAuth.token) {
                     requestPayload.teacherToken = state.teacherAuth.token;
@@ -1704,6 +1706,10 @@
                 state.student.progress = { ...state.student.progress, ...dataRes.progress };
                 state.student.answers = dataRes.answers || {};
             }
+            // Ambil daftar teman nyata dari tab USERS sesuai kelas murid yang login.
+            const peersRes = await apiCall('getStudentPeers', { nisn: userId });
+            state.student.peers = (peersRes && peersRes.status === 'success' && Array.isArray(peersRes.students)) ? peersRes.students : [];
+            state.student.peersLoaded = !!(peersRes && peersRes.status === 'success');
             // Jawaban server menjadi dasar; draft lokal yang belum terkirim menimpa nilai lama.
             const localDraft = readStudentDraft(userId);
             if (localDraft) {
@@ -1795,8 +1801,17 @@
                 state.teacherSettings.teacherUsername = state.teacherAuth.nip;
                 state.teacherSettings.teacherDisplayName = ''; // Nama tampilan hanya diambil dari Pengaturan yang sudah disimpan.
                 state.teacherSettings.teacherClass = state.teacherAuth.kelas;
+                resetTeacherSchoolProfile();
                 closeLoginGuruModal();
                 await fetchTeacherBoardData();
+                // Pengaturan global tidak boleh mengisi identitas sekolah guru lain.
+                resetTeacherSchoolProfile();
+                const profileResult = await apiCall('getTeacherSchoolProfile');
+                if (!profileResult || profileResult.status !== 'success') {
+                    showModal('Profil Sekolah Belum Dimuat', profileResult?.message || 'Tidak dapat membaca profil sekolah dari database. Coba login ulang.', 'warning');
+                } else {
+                    applyTeacherSchoolProfile(profileResult.profile || {});
+                }
                 navigateTo('guru_board');
                 startTeacherNotificationPolling();
             } else if (res && res.status === 'success' && res.fallback) {
@@ -2972,12 +2987,31 @@
                 </div></section>`;
         }
 
+        function getActualStudentClassmates() {
+            const myNisn = String(state.student.nisn || '').trim();
+            const myName = String(state.student.name || '').trim().toLowerCase();
+            const myClass = normalizeKelas(state.student.kelas || '');
+            const source = Array.isArray(state.student.peers) ? state.student.peers : [];
+            return source.filter(s => {
+                const nisn = String(s.nisn || s.ID_NISN || '').trim();
+                const name = String(s.nama || s.NAMA || s.name || '').trim();
+                const kelas = normalizeKelas(s.kelas || s.KELAS || '');
+                return name && (myNisn ? nisn !== myNisn : name.toLowerCase() !== myName)
+                    && (!myClass || !kelas || kelas === myClass);
+            });
+        }
+
         function getStudentPeerOptions(actId) {
-            const student = studentMasterDB.find(s => s.nama === state.student.name);
-            const group = student ? student.kelompok : state.student.kelompok;
-            let members = studentMasterDB.filter(s => s.nama !== state.student.name && group && group !== 'Belum Ada Kelompok' && s.kelompok === group);
-            if (!members.length) members = studentMasterDB.filter(s => s.nama !== state.student.name && normalizeKelas(s.kelas) === normalizeKelas(state.student.kelas));
-            return members.map(s=>`<option value="${escapeHTML(s.nama)}" ${(state.student.answers[`${actId}_peer_target`]||'')===s.nama?'selected':''}>${escapeHTML(s.nama)}</option>`).join('');
+            const current = String((state.student.answers || {})[`${actId}_peer_target`] || '');
+            const classmates = getActualStudentClassmates();
+            if (!classmates.length) {
+                return `<option value="" disabled>Data teman sekelas belum tersedia di Kelola Kelas</option>`;
+            }
+            return classmates.map(s => {
+                const name = String(s.nama || s.NAMA || s.name || '').trim();
+                const nisn = String(s.nisn || s.ID_NISN || '').trim();
+                return `<option value="${escapeHTML(nisn || name)}" ${current === (nisn || name) || current === name ? 'selected' : ''}>${escapeHTML(name)}</option>`;
+            }).join('');
         }
 
         function updateStudentAPKChoice(actId, kind, itemKey, value) {
@@ -3432,29 +3466,28 @@ function renderStudentActivityForm(actId) {
         }
 
         function renderPeerAssessmentInput(actId) {
-            const targetVal = state.student.answers[`${actId}_peer_target`] || '';
+            const targetVal = String(state.student.answers[`${actId}_peer_target`] || '');
             const ratingVal = state.student.answers[`${actId}_peer`] || '';
-
-            const loggedInStudent = studentMasterDB.find(s => s.nama === state.student.name);
-            const myKelompok = loggedInStudent ? loggedInStudent.kelompok : state.student.kelompok;
-
-            let groupMembers = [];
-            if (myKelompok && myKelompok !== 'Belum Ada Kelompok') {
-                groupMembers = studentMasterDB.filter(s => s.nama !== state.student.name && s.kelompok === myKelompok);
-            }
-            if (groupMembers.length === 0) {
-                groupMembers = studentMasterDB.filter(s => s.nama !== state.student.name);
-            }
-
+            const classmates = getActualStudentClassmates();
+            const classLabel = escapeHTML(state.student.kelas || 'kelas yang terdaftar');
+            const peerOptions = classmates.length
+                ? classmates.map(s => {
+                    const name = String(s.nama || s.NAMA || s.name || '').trim();
+                    const nisn = String(s.nisn || s.ID_NISN || '').trim();
+                    const value = nisn || name;
+                    return `<option value="${escapeHTML(value)}" ${(targetVal === value || targetVal === name) ? 'selected' : ''}>${escapeHTML(name)}</option>`;
+                }).join('')
+                : `<option value="" disabled>Belum ada data teman dari Kelola Kelas</option>`;
             return `
                 <div class="bg-purple-50 p-4 rounded-2xl border border-purple-200 space-y-2">
-                    <label class="block text-xs font-black text-purple-900">👥 Peer Assessment (Penilaian Teman Kelompok): <span class="text-rose-500">*</span></label>
+                    <label class="block text-xs font-black text-purple-900">👥 Penilaian Teman Sebaya <span class="text-rose-500">*</span></label>
+                    <p class="text-[11px] text-purple-800">Daftar teman diambil dari data murid yang terdaftar pada kelas ${classLabel}. Nama contoh/dummy tidak digunakan.</p>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                         <div>
-                            <label class="block text-[11px] font-bold text-purple-800 mb-1">1. Nama Teman Kelompok ${myKelompok ? `(${escapeHTML(myKelompok)})` : ''}:</label>
-                            <select onchange="updateStudentAnswerLocally('${actId}_peer_target', this.value)" class="w-full p-2.5 rounded-xl text-xs font-bold bg-white border border-purple-200 outline-none">
-                                <option value="">-- Pilih Nama Teman Se-Kelompok --</option>
-                                ${groupMembers.map(s => `<option value="${escapeHTML(s.nama)}" ${targetVal === s.nama ? 'selected' : ''}>${escapeHTML(s.nama)} (${escapeHTML(s.kelompok || s.kelas)})</option>`).join('')}
+                            <label class="block text-[11px] font-bold text-purple-800 mb-1">1. Nama teman yang dinilai:</label>
+                            <select ${classmates.length ? '' : 'disabled'} onchange="updateStudentAnswerLocally('${actId}_peer_target', this.value)" class="w-full p-2.5 rounded-xl text-xs font-bold bg-white border border-purple-200 outline-none">
+                                <option value="">-- Pilih teman sekelas --</option>
+                                ${peerOptions}
                             </select>
                         </div>
                         <div>
@@ -4330,12 +4363,28 @@ function renderStudentActivityForm(actId) {
           }
         }
 
-        function saveTeacherSettingsPage(){
+        const TEACHER_SCHOOL_KEYS = ['schoolName','npsn','schoolAddress','principal','principalNip','schoolDescription','logoUrl'];
+        function resetTeacherSchoolProfile(){
+          if(!state.teacherSettings)state.teacherSettings={};
+          TEACHER_SCHOOL_KEYS.forEach(k=>state.teacherSettings[k]='');
+        }
+        function applyTeacherSchoolProfile(profile){
+          resetTeacherSchoolProfile();
+          TEACHER_SCHOOL_KEYS.forEach(k=>state.teacherSettings[k]=String(profile[k]??''));
+        }
+        async function saveTeacherSettingsPage(){
           const val=id=>document.getElementById(id)?.value??'';const t=state.teacherSettings;
-          t.schoolName=val('settings-school-name')||t.schoolName||'SD NEGERI CIUYAH I';t.npsn=val('settings-npsn');t.schoolAddress=val('settings-address');t.principal=val('settings-principal');t.principalNip=val('settings-principal-nip').trim();t.schoolYear=val('settings-year');t.schoolDescription=val('settings-description');t.teacherDisplayName=val('settings-teacher-name').trim();t.teacherUsername=val('settings-username').trim()||String(state.teacherAuth?.nip||'').trim();t.teacherClass=getTeacherAssignedClass();t.selectedTopik=val('settings-topic')||t.selectedTopik;if(document.getElementById('settings-header-image'))t.headerImage=val('settings-header-image');t.logoUrl=val('settings-logo-url')||t.logoUrl||'';const color=document.querySelector('input[name="settings-theme"]:checked');if(color)t.themeColor=color.value;
+          t.schoolName=val('settings-school-name');t.npsn=val('settings-npsn');t.schoolAddress=val('settings-address');t.principal=val('settings-principal');t.principalNip=val('settings-principal-nip').trim();t.schoolYear=val('settings-year');t.schoolDescription=val('settings-description');t.teacherDisplayName=val('settings-teacher-name').trim();t.teacherUsername=val('settings-username').trim()||String(state.teacherAuth?.nip||'').trim();t.teacherClass=getTeacherAssignedClass();t.selectedTopik=val('settings-topic')||t.selectedTopik;if(document.getElementById('settings-header-image'))t.headerImage=val('settings-header-image');t.logoUrl=val('settings-logo-url')||t.logoUrl||'';const color=document.querySelector('input[name="settings-theme"]:checked');if(color)t.themeColor=color.value;
+          const profile = Object.fromEntries(TEACHER_SCHOOL_KEYS.map(k=>[k,t[k]||'']));
+          const profileSaved = await apiCall('saveTeacherSchoolProfile',{profile});
+          if(!profileSaved || profileSaved.status!=='success'){
+            showModal('Gagal Menyimpan Profil Sekolah',profileSaved?.message||'Penyimpanan ke database gagal.','error');
+            return;
+          }
+          applyTeacherSchoolProfile(profileSaved.profile || profile);
           savePortalProfile({name:t.teacherDisplayName||'',role:t.teacherClass||state.teacherAuth?.kelas||'',school:t.schoolName||'',email:'',avatar:''});
           renderTeacherBoard();
-          apiCall('saveTeacherSettings',{teacherSettings:t}).then(res=>{
+          apiCall('saveTeacherSettings',{teacherSettings:Object.fromEntries(Object.entries(t).filter(([k])=>!TEACHER_SCHOOL_KEYS.includes(k)))}).then(res=>{
             if(!res || res.status!=='success'){
               showModal('Gagal Menyimpan Pengaturan', (res&&res.message)||'Backend belum mengonfirmasi penyimpanan. Silakan login ulang bila sesi guru berakhir.', 'error');
               return;
@@ -4361,7 +4410,7 @@ function renderStudentActivityForm(actId) {
           const field=(label,id,value,placeholder='')=>`<label class="block text-[11px] font-bold text-slate-700">${label}<input id="${id}" value="${escapeHTML(value||'')}" placeholder="${placeholder}" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-normal"></label>`;
           const yearField=()=>`<label class="block text-[11px] font-bold text-slate-700">Tahun Ajaran Aktif<select id="settings-year" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-normal">${getAcademicYearOptions(t.schoolYear||'2026/2027').map(y=>`<option value="${y}" ${String(t.schoolYear||'2026/2027')===y?'selected':''}>${y}</option>`).join('')}</select><small class="mt-1 block font-normal text-slate-500">Pilihan ini berlaku untuk seluruh tampilan PORTAL-SRL.</small></label>`;
           let panel='';
-          if(teacherSettingsTab==='sekolah')panel=`<div class="grid gap-4 lg:grid-cols-2"><section class="rounded-2xl border bg-white p-4"><h3 class="font-black"><i class="fa-solid fa-school mr-2 text-emerald-600"></i>Profil Sekolah</h3><p class="mb-4 mt-1 text-[10px] text-slate-500">Informasi dasar sekolah yang ditampilkan pada portal.</p><div class="grid gap-3 sm:grid-cols-2">${field('Nama Sekolah','settings-school-name',t.schoolName||'SD NEGERI CIUYAH I')}${field('NPSN','settings-npsn',t.npsn||'20212345')}${field('Alamat','settings-address',t.schoolAddress||'Desa Ciuyah, Kecamatan Cisarua, Kabupaten Sumedang')}${field('Nama Kepala Sekolah','settings-principal',t.principal||'')}${field('NIP Kepala Sekolah','settings-principal-nip',t.principalNip||'','Masukkan NIP kepala sekolah')}${yearField()}<div class="sm:col-span-2"><label for="settings-school-logo-file" class="block text-[11px] font-bold text-slate-700">Upload Logo Sekolah<input id="settings-school-logo-file" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onchange="handleSchoolLogoUpload(this)" class="mt-1 block w-full cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-normal file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-600 file:px-3 file:py-2 file:font-bold file:text-white"><small class="mt-1 block font-normal text-slate-500">Pilih file gambar logo sekolah. Logo akan diperkecil otomatis agar mudah disimpan.</small></label><input type="hidden" id="settings-logo-url" value="${escapeHTML(t.logoUrl||'')}"><div id="settings-school-logo-preview" class="mt-2 ${t.logoUrl?'':'hidden'} rounded-xl border border-emerald-100 bg-emerald-50 p-3"><img src="${escapeHTML(t.logoUrl||'')}" alt="Pratinjau logo sekolah" class="max-h-20 max-w-40 object-contain"></div></div></div><label class="mt-3 block text-[11px] font-bold">Deskripsi Singkat<textarea id="settings-description" rows="3" class="mt-1 w-full rounded-lg border p-3 text-xs">${escapeHTML(t.schoolDescription||'PORTAL-SRL digunakan sebagai media portofolio digital untuk mendukung pembelajaran Kokurikuler Sekolah Ramah Lingkungan.')}</textarea></label></section><section class="rounded-2xl border bg-white p-4"><h3 class="font-black"><i class="fa-solid fa-user-gear mr-2 text-sky-600"></i>Profil Guru</h3><p class="mb-4 mt-1 text-[10px] text-slate-500">Informasi akun guru yang aktif.</p><div class="grid gap-3">${field('Nama Guru','settings-teacher-name',t.teacherDisplayName||'','Masukkan nama lengkap guru')}${field('Username / NIP','settings-username',t.teacherUsername||state.teacherAuth?.nip||'','NIP akun guru')}<div class="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs"><b class="text-emerald-900">Kelas Tanggung Jawab</b><p class="mt-1 text-emerald-800">${escapeHTML(getTeacherAssignedClass() || 'Belum diatur. Buka tab Kelas & Kelompok untuk menetapkan kelas.')}</p></div></div></section></div>`;
+          if(teacherSettingsTab==='sekolah')panel=`<div class="grid gap-4 lg:grid-cols-2"><section class="rounded-2xl border bg-white p-4"><h3 class="font-black"><i class="fa-solid fa-school mr-2 text-emerald-600"></i>Profil Sekolah</h3><p class="mb-4 mt-1 text-[10px] text-slate-500">Informasi dasar sekolah yang ditampilkan pada portal.</p><div class="grid gap-3 sm:grid-cols-2">${field('Nama Sekolah','settings-school-name',t.schoolName||'')}${field('NPSN','settings-npsn',t.npsn||'')}${field('Alamat','settings-address',t.schoolAddress||'')}${field('Nama Kepala Sekolah','settings-principal',t.principal||'')}${field('NIP Kepala Sekolah','settings-principal-nip',t.principalNip||'','Masukkan NIP kepala sekolah')}${yearField()}<div class="sm:col-span-2"><label for="settings-school-logo-file" class="block text-[11px] font-bold text-slate-700">Upload Logo Sekolah<input id="settings-school-logo-file" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onchange="handleSchoolLogoUpload(this)" class="mt-1 block w-full cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-normal file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-600 file:px-3 file:py-2 file:font-bold file:text-white"><small class="mt-1 block font-normal text-slate-500">Pilih file gambar logo sekolah. Logo akan diperkecil otomatis agar mudah disimpan.</small></label><input type="hidden" id="settings-logo-url" value="${escapeHTML(t.logoUrl||'')}"><div id="settings-school-logo-preview" class="mt-2 ${t.logoUrl?'':'hidden'} rounded-xl border border-emerald-100 bg-emerald-50 p-3"><img src="${escapeHTML(t.logoUrl||'')}" alt="Pratinjau logo sekolah" class="max-h-20 max-w-40 object-contain"></div></div></div><label class="mt-3 block text-[11px] font-bold">Deskripsi Singkat<textarea id="settings-description" rows="3" class="mt-1 w-full rounded-lg border p-3 text-xs">${escapeHTML(t.schoolDescription||'')}</textarea></label></section><section class="rounded-2xl border bg-white p-4"><h3 class="font-black"><i class="fa-solid fa-user-gear mr-2 text-sky-600"></i>Profil Guru</h3><p class="mb-4 mt-1 text-[10px] text-slate-500">Informasi akun guru yang aktif.</p><div class="grid gap-3">${field('Nama Guru','settings-teacher-name',t.teacherDisplayName||'','Masukkan nama lengkap guru')}${field('Username / NIP','settings-username',t.teacherUsername||state.teacherAuth?.nip||'','NIP akun guru')}<div class="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs"><b class="text-emerald-900">Kelas Tanggung Jawab</b><p class="mt-1 text-emerald-800">${escapeHTML(getTeacherAssignedClass() || 'Belum diatur. Buka tab Kelas & Kelompok untuk menetapkan kelas.')}</p></div></div></section></div>`;
           else if(teacherSettingsTab==='pengguna')panel=`<div class="grid gap-4 lg:grid-cols-2"><section class="rounded-2xl border bg-white p-4"><h3 class="font-black">Data Akun Guru</h3><div class="mt-4 grid gap-3">${field('Nama Guru','settings-teacher-name',t.teacherDisplayName||'','Masukkan nama lengkap guru')}${field('Username / NIP','settings-username',t.teacherUsername||state.teacherAuth?.nip||'','NIP akun guru')}<p class="rounded-xl bg-amber-50 p-3 text-xs text-amber-900">Pembuatan dan penghapusan akun membutuhkan backend dengan pengaturan hak akses.</p></div></section><section class="rounded-2xl border bg-white p-4"><h3 class="font-black">Jenis Pengguna</h3><div class="mt-3 grid gap-3 sm:grid-cols-3">${[['Guru','fa-user-tie','Mengelola aktivitas dan asesmen'],['Siswa','fa-user-graduate','Mengerjakan aktivitas dan mengunggah bukti'],['Orang Tua','fa-house-user','Mendukung pemantauan murid']].map(([a,b,c])=>`<div class="rounded-xl border bg-slate-50 p-3 text-center"><i class="fa-solid ${b} text-2xl text-sky-600"></i><b class="mt-2 block text-xs">${a}</b><p class="mt-1 text-[10px] text-slate-500">${c}</p></div>`).join('')}</div></section></div>`;
           else if(teacherSettingsTab==='kelas')panel=`<section class="rounded-2xl border border-emerald-100 bg-white p-4"><div class="flex items-start gap-3"><span class="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700"><i class="fa-solid fa-lock"></i></span><div><h3 class="font-black">Kelas Tanggung Jawab Guru</h3><p class="mt-1 max-w-3xl text-xs leading-relaxed text-slate-600">Tetapkan satu kelas untuk akun yang sedang login. Setelah disimpan, seluruh data murid, bukti karya, refleksi, penilaian, dan laporan di akun ini dibatasi ke kelas tersebut. Tidak tersedia pilihan Semua Kelas.</p></div></div><div class="mt-5 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end"><label class="block text-xs font-bold text-slate-700">Kelas yang menjadi tanggung jawab<select id="settings-assigned-class" class="mt-1 w-full rounded-xl border border-emerald-200 bg-white p-3 text-sm"><option value="">Pilih kelas</option>${[['Kelas I','Kelas I'],['Kelas II','Kelas II'],['Kelas III','Kelas III'],['Kelas IV','Kelas IV'],['Kelas V','Kelas V'],['Kelas VI','Kelas VI']].map(([v,l])=>`<option value="${v}" ${normalizeTeacherClassKey(getTeacherAssignedClass())===normalizeTeacherClassKey(v)?'selected':''}>${l}</option>`).join('')}</select></label><button onclick="saveTeacherAssignedClass()" class="rounded-xl bg-emerald-600 px-5 py-3 text-xs font-black text-white hover:bg-emerald-700"><i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Kelas Saya</button></div><div class="mt-4 rounded-xl border border-sky-100 bg-sky-50 p-3 text-xs text-sky-900"><b>Kelas aktif saat ini:</b> ${escapeHTML(getTeacherAssignedClass() || 'Belum ditetapkan')}<p class="mt-1">Jika kelas belum ditetapkan, data murid tidak ditampilkan sampai pengaturan disimpan.</p></div></section>`;
           else if(teacherSettingsTab==='topik')panel=`<section class="rounded-2xl border bg-white p-4"><h3 class="font-black">Topik & Aktivitas</h3><p class="mt-1 text-xs text-slate-500">Pilih topik aktif. Aktivitas Topik 2 ditampilkan sesuai urutan tahapnya.</p><label class="mt-4 block max-w-xl text-xs font-bold">Topik Aktif<select id="settings-topic" class="mt-1 w-full rounded-xl border p-3 text-xs"><option value="Topik 2: Aku Bisa Menjaga Lingkungan" ${(t.selectedTopik||'').includes('Topik 2')?'selected':''}>Topik 2: Aku Bisa Menjaga Lingkungan</option><option value="Topik 1: Kenali Lingkungan Sekolahku">Topik 1: Kenali Lingkungan Sekolahku</option><option value="Topik 3: Aksi Nyata Daur Ulang Mandiri">Topik 3: Aksi Nyata Daur Ulang Mandiri</option></select></label><div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">${teacherPortfolioActivities().map((a,i)=>`<div class="flex items-center gap-3 rounded-xl border p-3"><span class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 font-black text-emerald-700">${i+1}</span><div><b class="block text-xs">${a.title}</b><p class="text-[10px] text-slate-500">${a.short}</p></div><span class="ml-auto rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-bold text-emerald-700">Aktif</span></div>`).join('')}</div></section>`;
