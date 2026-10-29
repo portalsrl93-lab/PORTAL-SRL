@@ -1675,12 +1675,61 @@
             try { localStorage.removeItem(studentDraftStorageKey(userId)); }
             catch (err) { console.warn('Draft siswa tidak dapat dihapus:', err); }
         }
-        function clearStudentDraftIfUnchanged(userId, submittedAnswers) {
+        function clearStudentDraftIfUnchanged(userId, submittedAnswers, scope) {
             const latestDraft = readStudentDraft(userId);
-            // Jangan hapus ketikan baru yang dibuat ketika proses penyimpanan masih berlangsung.
-            if (latestDraft && JSON.stringify(latestDraft.answers || {}) !== JSON.stringify(submittedAnswers || {})) return false;
-            clearStudentDraft(userId);
-            return true;
+            if (!latestDraft) return true;
+            const latestAnswers = { ...(latestDraft.answers || {}) };
+            const submitted = submittedAnswers || {};
+            const prefix = scope ? String(scope) + '_' : '';
+            const keysToCheck = scope
+                ? Object.keys(latestAnswers).filter(key => key.startsWith(prefix))
+                : Object.keys(latestAnswers);
+            let changedDuringSave = false;
+            keysToCheck.forEach(key => {
+                // Jangan hapus ketikan yang berubah ketika penyimpanan masih berlangsung.
+                if (JSON.stringify(latestAnswers[key]) === JSON.stringify(submitted[key])) delete latestAnswers[key];
+                else changedDuringSave = true;
+            });
+            latestDraft.answers = latestAnswers;
+            latestDraft.savedAt = new Date().toISOString();
+            if (!Object.keys(latestAnswers).length && !Object.keys(latestDraft.progress || {}).length) {
+                clearStudentDraft(userId);
+            } else {
+                try { localStorage.setItem(studentDraftStorageKey(userId), JSON.stringify(latestDraft)); }
+                catch (err) { console.warn('Draf tersisa tidak dapat disimpan:', err); }
+            }
+            return !changedDuringSave;
+        }
+
+        function setStudentDraftIndicator(actId, message, stateName = 'saved') {
+            const el = document.getElementById(`student-draft-status-${actId}`);
+            if (!el) return;
+            el.textContent = message;
+            el.dataset.state = stateName;
+            el.className = 'student-draft-status text-xs font-semibold rounded-lg px-3 py-2 mb-2 ' +
+                (stateName === 'uploading' ? 'bg-blue-50 text-blue-700 border border-blue-100' :
+                 stateName === 'error' ? 'bg-amber-50 text-amber-800 border border-amber-100' :
+                 'bg-emerald-50 text-emerald-700 border border-emerald-100');
+        }
+
+        // Delegated autosave: memastikan semua input, textarea, dan select dalam
+        // Aktivitas 1–5 memicu persistensi lokal setelah handler input yang ada berjalan.
+        if (!window.__portalSrlActivityDraftListenersAttached) {
+            window.__portalSrlActivityDraftListenersAttached = true;
+            const persistActivityFormDraft = function(event) {
+                const target = event.target;
+                if (!(target instanceof Element)) return;
+                const scope = target.closest('.student-activity-draft-scope');
+                if (!scope || !state.student || !state.student.nisn) return;
+                const actId = scope.dataset.activityId || '';
+                // Handler oninput/onchange yang sudah ada memperbarui state terlebih dahulu.
+                persistStudentDraft();
+                if (/^act[1-5]$/.test(actId)) {
+                    setStudentDraftIndicator(actId, '✓ Draf otomatis tersimpan di perangkat ini', 'saved');
+                }
+            };
+            document.addEventListener('input', persistActivityFormDraft, true);
+            document.addEventListener('change', persistActivityFormDraft, true);
         }
         function updateStudentAnswerLocally(key, value) {
             state.student.answers[key] = value;
@@ -1698,6 +1747,10 @@
             }
             // Simpan langsung setiap ada perubahan agar isian tidak hilang saat refresh/penutupan browser.
             persistStudentDraft();
+            const actKey = String(key || '').split('_')[0];
+            if (['act1','act2','act3','act4','act5'].includes(actKey)) {
+                setStudentDraftIndicator(actKey, '✓ Draf otomatis tersimpan di perangkat ini', 'saved');
+            }
         }
 
         // Batas waktu untuk mencegah spinner berjalan tanpa henti saat GAS lambat.
@@ -1717,7 +1770,7 @@
             'saveTeacherClass', 'savePengaturan', 'saveTeacherSettings', 'saveStimulasiContent',
             'saveRoomLearningContent', 'saveStimulasiData', 'saveRuangBelajarData', 'saveRestrictionStatus', 'saveTeacherEvaluation',
             'saveTeacherActivityAssessment', 'saveTeacherFinalCapaian', 'saveTeacherFeedback', 'savePortfolioAssessment',
-            'uploadFileToDrive', 'uploadGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile', 'saveStudentGroups'
+            'uploadFileToDrive', 'uploadStudentFile', 'uploadGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile', 'saveStudentGroups'
         ]);
         function getApiSessionCacheKey(action, payload) {
             let scope = '';
@@ -1774,13 +1827,14 @@
                 };
                 if (controller) requestOptions.signal = controller.signal;
 
+                const requestTimeoutMs = action === 'uploadStudentFile' ? 60000 : API_TIMEOUT_MS;
                 const timeoutPromise = new Promise((_, reject) => {
                     timeoutId = setTimeout(() => {
                         if (controller) controller.abort();
-                        const timeoutError = new Error(`Permintaan melewati batas waktu ${Math.round(API_TIMEOUT_MS / 1000)} detik.`);
+                        const timeoutError = new Error(`Permintaan melewati batas waktu ${Math.round(requestTimeoutMs / 1000)} detik.`);
                         timeoutError.name = 'TimeoutError';
                         reject(timeoutError);
-                    }, API_TIMEOUT_MS);
+                    }, requestTimeoutMs);
                 });
                 const response = await Promise.race([
                     fetch(`${GAS_API_URL}?action=${encodeURIComponent(action)}`, requestOptions),
@@ -1929,7 +1983,9 @@
                 for (const kind of ['lkpd', 'photo']) {
                     const file = studentSelectedFiles[`${actId}_${kind}`];
                     if (file) {
+                        setStudentDraftIndicator(actId, `⏳ Mengunggah ${kind === 'lkpd' ? 'LKPD' : 'foto dokumentasi'} ke Google Drive…`, 'uploading');
                         const uploaded = await uploadStudentEvidence(actId, kind, file);
+                        setStudentDraftIndicator(actId, `✓ ${kind === 'lkpd' ? 'LKPD' : 'Foto dokumentasi'} berhasil diunggah`, 'saved');
                         uploads[kind] = { url: uploaded.url, fileId: uploaded.fileId || '', fileName: uploaded.fileName || file.name };
                         submittedAnswers[`${actId}_${kind}_url`] = uploaded.url;
                         submittedAnswers[`${actId}_${kind}_filename`] = uploaded.fileName || file.name;
@@ -1940,6 +1996,7 @@
             } catch (uploadError) {
                 state.student.progress[actId] = false;
                 persistStudentDraft();
+                setStudentDraftIndicator(actId, '⚠ Unggah gagal. Draf jawaban tetap tersimpan di perangkat ini; coba unggah kembali.', 'error');
                 showModal('Unggah Belum Berhasil', escapeHTML(uploadError.message || 'Berkas belum berhasil diunggah. Periksa koneksi dan coba lagi.'), 'error');
                 return;
             }
@@ -1952,7 +2009,7 @@
                 showModal('Belum Tersimpan ⚠️', escapeHTML(saveResult?.message || 'Data belum berhasil dikirim ke server. Draft tetap tersimpan di perangkat ini.'), 'error');
                 return;
             }
-            clearStudentDraftIfUnchanged(state.student.nisn, submittedAnswers);
+            const activityDraftCleared = clearStudentDraftIfUnchanged(state.student.nisn, submittedAnswers, actId);
             delete studentSelectedFiles[`${actId}_lkpd`];
             delete studentSelectedFiles[`${actId}_photo`];
 
@@ -1962,6 +2019,9 @@
             if(actId==='act4') stars="⭐⭐⭐⭐";
             if(actId==='act5') stars="⭐⭐⭐⭐⭐";
 
+            setStudentDraftIndicator(actId, activityDraftCleared
+                ? '✓ Tugas tersimpan resmi ke Google Sheets. Draf aktivitas ini telah dibersihkan.'
+                : '✓ Tugas tersimpan resmi. Ketikan terbaru yang dibuat saat proses simpan tetap dipertahankan sebagai draf.', 'saved');
             showModal('Aktivitas Selesai! 🎉', `Selamat! Kamu mendapatkan reward Bintang ${stars}. Seluruh bukti belajarmu berhasil tersimpan! Klik tombol <strong>Selanjutnya</strong> untuk berpindah ke tahap berikutnya.`, 'success');
 
             renderStudentBoard();
@@ -1982,7 +2042,7 @@
                 return;
             }
             state.student.progress.stimulasi = true;
-            clearStudentDraftIfUnchanged(state.student.nisn, submittedAnswers);
+            clearStudentDraftIfUnchanged(state.student.nisn, submittedAnswers, 'stimulasi');
             showModal('Jawaban Tersimpan 💾', 'Respon pengamatan stimulasi berhasil disimpan! Silakan klik Selanjutnya untuk memulai Aktivitas 1.', 'success');
             renderStudentBoard();
         }
@@ -2003,7 +2063,7 @@
                 return;
             }
             state.student.progress.refleksi_akhir = true;
-            clearStudentDraftIfUnchanged(state.student.nisn, submittedAnswers);
+            clearStudentDraftIfUnchanged(state.student.nisn, submittedAnswers, 'refleksi_akhir');
             showModal('Refleksi Terkirim 🏆', 'Refleksi akhir berhasil disimpan. Selamat atas pencapaianmu!', 'success');
             renderStudentBoard();
         }
@@ -3912,7 +3972,7 @@ function renderStudentActivityForm(actId) {
                 </div>
               </section>`;
 
-            return `<div class="space-y-4">${hero}${remainingForm}</div>`;
+            return `<div class="space-y-4 student-activity-draft-scope" data-activity-id="${actId}">${hero}<div id="student-draft-status-${actId}" class="student-draft-status text-xs font-semibold rounded-lg px-3 py-2 mb-2 bg-emerald-50 text-emerald-700 border border-emerald-100" role="status">✓ Draf otomatis tersimpan di perangkat ini</div>${remainingForm}</div>`;
         }
 
         function openRoomReading(index) {
