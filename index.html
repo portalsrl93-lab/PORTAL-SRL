@@ -8,6 +8,8 @@
 
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js untuk diagram radar capaian APK -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
     <!-- FontAwesome Icons -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <!-- Google Fonts: Nunito & Inter -->
@@ -1156,10 +1158,11 @@
                                     email: state.teacherAuth.nip, nip: state.teacherAuth.nip, user_id: state.teacherAuth.nip
                                 });
                                 if (profileResult && (profileResult.status === 'success' || profileResult.success === true) && (profileResult.profile || profileResult.data)) {
-                                    applyTeacherSchoolProfile(profileResult.profile || profileResult.data);
-                                    state.teacherSettings.teacherDisplayName = String(state.teacherSettings.teacherDisplayName || state.teacherAuth.nama || '').trim();
+                                    const data = profileResult.profile || profileResult.data || {};
+                                    applyTeacherSchoolProfile(data);
+                                    state.teacherSettings.teacherDisplayName = String(data.teacherDisplayName || data.namaGuru || data.nama_guru || data.nama || state.teacherSettings.teacherDisplayName || state.teacherAuth.nama || '').trim();
                                     const nameInput = document.getElementById('inputNamaGuru');
-                                    if (nameInput && state.teacherSettings.teacherDisplayName) nameInput.value = state.teacherSettings.teacherDisplayName;
+                                    if (nameInput) nameInput.value = data.namaGuru || data.nama_guru || data.teacherDisplayName || data.nama || state.teacherSettings.teacherDisplayName || '';
                                     renderTeacherBoard();
                                 }
                             })()
@@ -2441,9 +2444,9 @@
                 refreshStimulasiContent().then(function(ok) {
                     if (ok && state.currentView === 'guru_board' && state.teacher.currentMenu === 'stimulasi') renderTeacherBoard();
                 });
-            } else if (menuKey === 'ruang_belajar') {
+            } else if (menuKey === 'ruang_belajar_editor' || menuKey === 'ruang_belajar') {
                 refreshRoomLearningContent().then(function() {
-                    if (state.currentView === 'guru_board' && state.teacher.currentMenu === 'ruang_belajar') renderTeacherBoard();
+                    if (state.currentView === 'guru_board' && ['ruang_belajar_editor','ruang_belajar'].includes(state.teacher.currentMenu)) renderTeacherBoard();
                 });
             }
         }
@@ -2805,6 +2808,7 @@
                     </main>
                 </div>
             `;
+            if (sec === 'pencapaianku') renderStudentAPKChart();
         }
 
         function renderNavBtnDesktop(id, label, icon) {
@@ -3270,6 +3274,39 @@
                 peer: []
             }
         };
+
+        let studentAPKChartInstance = null;
+        function renderStudentAPKChart() {
+            const canvas = document.getElementById('student-apk-radar-chart');
+            const fallback = document.getElementById('student-apk-radar-fallback');
+            if (!canvas) return;
+            if (!window.Chart) { canvas.hidden = true; if (fallback) fallback.hidden = false; return; }
+            canvas.hidden = false;
+            if (fallback) fallback.hidden = true;
+            const labels = [
+                'Penyampaian Argumentasi','Pengambilan Keputusan','Penyelesaian Masalah',
+                'Gagasan Baru','Fleksibilitas Berpikir','Karya','Peduli','Berbagi','Kerja Sama'
+            ];
+            const sub = state.student?.apkProfile?.subdimensions || {};
+            const values = labels.map(label => ({'Berkembang':1,'Cakap':2,'Mahir':3}[String(sub[label]?.level || '')] || 0));
+            const empty = document.getElementById('student-apk-radar-empty');
+            if (empty) empty.hidden = values.every(v => v === 0);
+            if (studentAPKChartInstance) { studentAPKChartInstance.destroy(); studentAPKChartInstance = null; }
+            studentAPKChartInstance = new Chart(canvas, {
+                type: 'radar',
+                data: { labels, datasets: [{
+                    label: 'Capaian APK', data: values, fill: true,
+                    backgroundColor: 'rgba(16,185,129,0.18)', borderColor: '#059669',
+                    pointBackgroundColor: labels.map((label,i) => i < 3 ? '#3B82F6' : i < 6 ? '#F59E0B' : '#10B981'),
+                    pointBorderColor: '#ffffff', pointRadius: 4, borderWidth: 2
+                }]},
+                options: {
+                    responsive: true, maintainAspectRatio: true,
+                    scales: { r: { min: 0, max: 3, ticks: { stepSize: 1, backdropColor: 'transparent', callback: value => ({0:'Belum',1:'Berkembang',2:'Cakap',3:'Mahir'}[value] || value) }, pointLabels: { font: { size: 10, weight: '600' }, color: '#334155' }, grid: { color: '#CBD5E1' }, angleLines: { color: '#CBD5E1' } } },
+                    plugins: { legend: { display: false }, tooltip: { callbacks: { label: context => { const level = ['Belum dinilai','Berkembang','Cakap','Mahir'][context.raw] || 'Belum dinilai'; return `${context.label}: ${level}`; } } } }
+                }
+            });
+        }
 
         function renderStudentAPKAssessment(actId, kind, items) {
             if (!items || !items.length) return '';
@@ -3758,8 +3795,15 @@ function renderStudentActivityForm(actId) {
                 const res = await apiCall('getRuangBelajarData', { forceRefresh: true, teacherClass: state.teacherAuth?.kelas || state.student?.kelas || '' });
                 if (res && res.status === 'success') {
                     state.teacherSettings.roomReadings = Array.isArray(res.roomReadings) ? res.roomReadings : [];
-                    state.teacherSettings.roomVideos = Array.isArray(res.roomVideos) ? res.roomVideos : [];
-                    state.teacherSettings.roomVideoPublished = Array.isArray(res.roomVideoPublished) ? res.roomVideoPublished : [];
+                    state.teacherSettings.roomVideos = Array.isArray(res.roomVideos) ? res.roomVideos : Array.from({length:5},(_,i)=>res['video'+(i+1)]||'');
+                    state.teacherSettings.roomVideoPublished = Array.isArray(res.roomVideoPublished) ? res.roomVideoPublished : Array.from({length:5},(_,i)=>!!res['isPublished'+(i+1)]);
+                    // Isi editor yang sedang terbuka langsung dari respons server sebelum board dirender ulang.
+                    for (let i = 0; i < 5; i++) {
+                        const videoInput = document.getElementById(`room-edit-video-${i}`);
+                        const publishedInput = document.getElementById(`room-edit-video-published-${i}`);
+                        if (videoInput) videoInput.value = String(state.teacherSettings.roomVideos[i] || res['video'+(i+1)] || '');
+                        if (publishedInput) publishedInput.checked = !!(state.teacherSettings.roomVideoPublished[i] ?? res['isPublished'+(i+1)]);
+                    }
                     if (res.unlockedActivities && typeof res.unlockedActivities === 'object') state.teacherSettings.unlockedActivities = { ...state.teacherSettings.unlockedActivities, ...res.unlockedActivities };
                     if (state.currentView === 'murid_board' && state.student.currentSection === 'ruang_belajar') renderStudentBoard();
                     if (state.currentView === 'guru_board' && state.teacher.currentMenu === 'ruang_belajar') renderTeacherBoard();
@@ -4048,7 +4092,7 @@ function renderStudentActivityForm(actId) {
             }).join('') : '';
             const radarDots = hasRadarScores ? radarItems.filter(item=>item.value>0).map((item)=>{const i=radarItems.indexOf(item);const q=radarPoint(item,i);return `<circle cx="${q.x.toFixed(1)}" cy="${q.y.toFixed(1)}" r="6" fill="${item.color}" stroke="#FFFFFF" stroke-width="2"><title>${item.label}: ${item.level}</title></circle>`;}).join('') : '';
             const radarLabels = radarItems.map((item,i)=>{const q=radarPoint(item,i,radarR+30);let anchor='middle';if(q.x<radarCx-12)anchor='end';else if(q.x>radarCx+12)anchor='start';let label=item.label;return `<text x="${q.x.toFixed(1)}" y="${(q.y+3).toFixed(1)}" text-anchor="${anchor}" font-size="10.5" font-weight="700" fill="#334155">${label}</text>`;}).join('');
-            const radarHtml = `<section class="rounded-2xl border border-violet-200 bg-gradient-to-br from-white via-sky-50 to-amber-50 p-3 sm:p-5 shadow-sm" aria-label="Diagram radar profil pencapaian APK"><div class="mb-2"><h2 class="text-xl sm:text-2xl font-black text-slate-800">Diagram Radar Profil Pencapaian APK Murid</h2><p class="text-sm text-slate-600">Topik 2 · Aku Bisa Menjaga Lingkungan. Diagram ini memiliki sembilan sumbu, masing-masing mewakili satu subdimensi APK. Titik menunjukkan kategori pencapaian yang tercantum pada tabel deskripsi di bawah.</p></div><div class="mx-auto w-full max-w-[760px] overflow-x-auto"><svg viewBox="0 0 540 440" role="img" aria-label="Diagram radar profil pencapaian APK murid dengan sembilan subdimensi" class="mx-auto block w-full" style="min-width:330px;max-height:560px">${radarGrid}${radarAxes}${radarArea}${radarColorSegments}${radarDots}${radarLabels}<text x="270" y="425" text-anchor="middle" font-size="10" fill="#64748B">1 = Berkembang · 2 = Cakap · 3 = Mahir</text></svg></div><div class="mt-3 flex flex-wrap justify-center gap-2 text-xs font-bold"><span class="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-2 text-blue-800"><span class="h-3 w-3 rounded-full bg-blue-500"></span>Penalaran Kritis</span><span class="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800"><span class="h-3 w-3 rounded-full bg-amber-500"></span>Kreativitas</span><span class="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-800"><span class="h-3 w-3 rounded-full bg-emerald-500"></span>Kolaborasi</span></div><div class="mt-2 flex flex-wrap justify-center gap-2 text-xs"><span class="rounded-full bg-lime-100 px-3 py-1 font-bold text-lime-900">Berkembang</span><span class="rounded-full bg-amber-100 px-3 py-1 font-bold text-amber-900">Cakap</span><span class="rounded-full bg-rose-100 px-3 py-1 font-bold text-rose-900">Mahir</span></div><p class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-950"><strong>Catatan:</strong> ${state.student.apkProfile?.status === 'loading' ? 'Sedang mengambil hasil penilaian guru...' : hasRadarScores ? 'Diagram diperbarui dari hasil penilaian guru yang tersimpan di database.' : 'Belum ada hasil penilaian guru yang tersimpan untuk ditampilkan. Setelah guru menyimpan Rekap Penilaian APK, buka kembali menu ini.'}</p></section>`;
+            const radarHtml = `<section class="rounded-2xl border border-violet-200 bg-gradient-to-br from-white via-sky-50 to-amber-50 p-3 sm:p-5 shadow-sm" aria-label="Diagram radar profil pencapaian APK"><div class="mb-2"><h2 class="text-xl sm:text-2xl font-black text-slate-800">Diagram Radar Profil Pencapaian APK Murid</h2><p class="text-sm text-slate-600">Sembilan sumbu mewakili subdimensi APK. Nilai 1 = Berkembang, 2 = Cakap, dan 3 = Mahir. Diagram mengikuti hasil penilaian guru yang tersimpan.</p></div><div id="student-apk-radar-chart-wrap" class="mx-auto w-full max-w-[760px]"><canvas id="student-apk-radar-chart" role="img" aria-label="Diagram radar sembilan subdimensi APK" style="width:100%;max-height:460px"></canvas><div id="student-apk-radar-fallback" class="overflow-x-auto" ${window.Chart?'hidden':''}><svg viewBox="0 0 540 440" role="img" aria-label="Diagram radar fallback profil APK" class="mx-auto block w-full" style="min-width:330px;max-height:560px">${radarGrid}${radarAxes}${radarArea}${radarColorSegments}${radarDots}${radarLabels}<text x="270" y="425" text-anchor="middle" font-size="10" fill="#64748B">1 = Berkembang · 2 = Cakap · 3 = Mahir</text></svg></div></div><p id="student-apk-radar-empty" class="mt-2 text-center text-xs text-slate-500" ${hasRadarScores?'hidden':''}>Belum ada nilai subdimensi dari guru. Diagram akan terisi setelah guru menyimpan penilaian.</p></section>`;
             const profileHtml = profiles.map((p, idx) => `
                 <section class="overflow-hidden rounded-2xl border ${idx===0?'border-rose-200 bg-rose-50/70':idx===1?'border-amber-200 bg-amber-50/70':'border-sky-200 bg-sky-50/70'}">
                     <h3 class="flex items-center gap-2 px-3 py-2 text-base sm:text-lg font-black ${idx===0?'text-rose-700':idx===1?'text-amber-800':'text-blue-800'}">
@@ -4213,8 +4257,7 @@ function renderStudentActivityForm(actId) {
                                             <button onclick="setTeacherMenu('penilaian_observasi')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_observasi'?'text-[#00a664] font-bold':''}">Observasi Guru</button>
                                             <button onclick="setTeacherMenu('penilaian_diri')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_diri'?'text-[#00a664] font-bold':''}">Penilaian Diri Murid</button>
                                             <button onclick="setTeacherMenu('penilaian_sebaya')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_sebaya'?'text-[#00a664] font-bold':''}">Penilaian Teman Sebaya</button>
-                                            <button onclick="setTeacherMenu('penilaian_rekap')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_rekap'?'text-[#00a664] font-bold':''}">Rekap Nilai Akhir & Kelengkapan</button>
-                                            <button onclick="setTeacherMenu('penilaian_subdimensi')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_subdimensi'?'text-[#00a664] font-bold':''}">Rekap Subdimensi APK</button>
+                                                                                        <button onclick="setTeacherMenu('penilaian_subdimensi')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_subdimensi'?'text-[#00a664] font-bold':''}">Rekap Subdimensi APK</button>
                                             <button onclick="setTeacherMenu('ceklist_pemantauan')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='ceklist_pemantauan'?'text-[#00a664] font-bold':''}">Daftar Ceklis Pemantauan</button>
                                         </div>
                                     ` : ''}
@@ -4566,7 +4609,7 @@ function renderStudentActivityForm(actId) {
                 const current = finals[student.nisn] || '';
                 return `<tr class="border-b border-slate-100"><td class="sticky left-0 z-10 border border-slate-200 bg-white p-3 align-top"><div class="font-black text-slate-800">${index+1}. ${escapeHTML(student.nama)}</div><div class="mt-1 text-[10px] text-slate-500">${escapeHTML(student.kelas)} · ${escapeHTML(student.kelompok || '')}</div><div class="text-[10px] text-slate-400">${escapeHTML(student.nisn || 'NISN tidak tersedia')}</div><label class="mt-3 block text-[10px] font-black text-slate-600">CAPAIAN AKHIR<select id="teacher-final-level-${student.id}" class="mt-1 w-full rounded-lg border border-emerald-200 bg-white p-2 text-xs font-bold"><option value="">Pilih capaian</option>${['BERKEMBANG','CAKAP','MAHIR'].map(level=>`<option value="${level}" ${current===level?'selected':''}>${level}</option>`).join('')}</select></label><button id="teacher-final-save-${student.id}" onclick="teacherFinalSave('${String(student.id).replace(/'/g,"\\'")}')" class="mt-2 w-full rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black text-white hover:bg-emerald-700">Simpan Penilaian</button></td>${cells}</tr>`;
             }).join('');
-            return `<div class="space-y-4 text-slate-800">${teacherPortfolioBanner('ASESMEN TOPIK 2','Rekap Penilaian','Pantau kelengkapan bukti belajar, penilaian diri, dan penilaian teman sebaya untuk Aktivitas 1 sampai 5 dalam satu matriks. Tetapkan capaian akhir setelah menelaah bukti murid.','fa-table-list',['Matriks Aktivitas 1–5','Detail Bukti Belajar','Capaian Perkembangan'])}<section class="rounded-2xl border border-emerald-100 bg-white p-4"><div class="flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-lg font-black text-emerald-950">Matriks Kelengkapan Tugas Murid</h2><p class="mt-1 text-xs text-slate-500">✓ hijau = komponen terdeteksi · ✗ abu-abu = data belum terdeteksi. Klik Detail / Pratinjau untuk membaca kiriman.</p></div><div class="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800">${students.length} murid</div></div><div class="mt-4 overflow-x-auto rounded-xl border border-slate-200"><table class="w-full min-w-[1150px] border-collapse text-left text-xs"><thead><tr class="bg-slate-100"><th rowspan="2" class="sticky left-0 z-20 min-w-[210px] border border-slate-200 bg-slate-100 p-3">Nama Murid / Capaian Akhir</th><th colspan="5" class="border border-slate-200 p-2 text-center">KELENGKAPAN PER AKTIVITAS</th></tr><tr class="bg-emerald-50">${acts.map(a=>`<th class="border border-slate-200 p-2 text-center">${a[1]}</th>`).join('')}</tr></thead><tbody>${rows || '<tr><td colspan="6" class="p-8 text-center text-slate-500">Belum ada data murid pada kelas tanggung jawab ini.</td></tr>'}</tbody></table></div><div class="mt-3 grid gap-2 text-[11px] text-slate-500 sm:grid-cols-3"><p>✓ Bukti belajar: tautan/file atau jawaban bukti terdeteksi.</p><p>✓ Penilaian diri: respons self-assessment terdeteksi.</p><p>✓ Teman sebaya: respons peer-assessment terdeteksi.</p></div><p class="mt-3 rounded-xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-900"><b>Catatan penilaian:</b> kelengkapan tugas merupakan informasi pendukung. Tetapkan capaian berdasarkan telaah mutu bukti dan deskriptor, bukan semata-mata jumlah ceklis.</p></section></div>`;
+            return `<div class="space-y-4 text-slate-800">${teacherPortfolioBanner('ASESMEN TOPIK 2','Rekap Penilaian','Pantau kelengkapan bukti belajar, penilaian diri, dan penilaian teman sebaya untuk Aktivitas 1 sampai 5 dalam satu matriks. Tetapkan capaian akhir setelah menelaah bukti murid.','fa-table-list',['Matriks Aktivitas 1–5','Detail Bukti Belajar','Capaian Perkembangan'])}<section class="rounded-2xl border border-emerald-100 bg-white p-4"><div class="flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-lg font-black text-emerald-950">Matriks Kelengkapan Tugas Murid</h2><p class="mt-1 text-xs text-slate-500">Badge hijau = data tersedia · abu-abu = belum tersedia. Klik ikon untuk membuka rincian aktivitas.</p></div><div class="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-800">${students.length} murid</div></div><div class="mt-4 overflow-x-auto rounded-xl border border-slate-200"><table class="w-full min-w-[1150px] border-collapse text-left text-xs"><thead><tr class="bg-slate-100"><th rowspan="2" class="sticky left-0 z-20 min-w-[210px] border border-slate-200 bg-slate-100 p-3">Nama Murid / Capaian Akhir</th><th colspan="5" class="border border-slate-200 p-2 text-center">KELENGKAPAN PER AKTIVITAS</th></tr><tr class="bg-emerald-50">${acts.map(a=>`<th class="border border-slate-200 p-2 text-center">${a[1]}</th>`).join('')}</tr></thead><tbody>${rows || '<tr><td colspan="6" class="p-8 text-center text-slate-500">Belum ada data murid pada kelas tanggung jawab ini.</td></tr>'}</tbody></table></div><div class="mt-3 grid gap-2 text-[11px] text-slate-500 sm:grid-cols-3"><p>✓ Bukti belajar: tautan/file atau jawaban bukti terdeteksi.</p><p>✓ Penilaian diri: respons self-assessment terdeteksi.</p><p>✓ Teman sebaya: respons peer-assessment terdeteksi.</p></div><p class="mt-3 rounded-xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-900"><b>Catatan penilaian:</b> kelengkapan tugas merupakan informasi pendukung. Tetapkan capaian berdasarkan telaah mutu bukti dan deskriptor, bukan semata-mata jumlah ceklis.</p></section></div>`;
         }
 
         function renderTeacherAssessmentView(menu) {
@@ -4829,6 +4872,7 @@ function renderStudentActivityForm(actId) {
           const profile = Object.fromEntries(TEACHER_SCHOOL_KEYS.map(k=>[k,t[k]||'']));
           profile.teacherDisplayName = String(val('inputNamaGuru').trim() || t.teacherDisplayName || state.teacherAuth?.nama || '').trim();
           profile.namaGuru = profile.teacherDisplayName;
+          profile.nama_guru = profile.teacherDisplayName;
           profile.teacherUsername = String(t.teacherUsername || state.teacherAuth?.nip || '').trim();
           if (!profile.teacherUsername) { showModal('Identitas Guru Tidak Ditemukan','Silakan login ulang sebelum menyimpan profil.','error'); return; }
           const profileSaved = await apiCall('saveTeacherSchoolProfile',{profile, teacherUsername:profile.teacherUsername});
@@ -4926,7 +4970,7 @@ function renderStudentActivityForm(actId) {
         function renderTeacherMonitoringChecklist() {
             const students = teacherAssessmentStudents().filter(s => teacherClassMatches(s.kelas));
             const activities = [['act1','Aktivitas 1'],['act2','Aktivitas 2'],['act3','Aktivitas 3'],['act4','Aktivitas 4'],['act5','Aktivitas 5']];
-            const cell = (ok, label) => `<span title="${label}" class="inline-flex h-6 min-w-6 items-center justify-center rounded-md px-1 text-xs font-black ${ok?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-400'}">${ok?'✓':'✗'}</span>`;
+            const cell = (ok, icon, label, studentId, actId) => `<button type="button" title="${label} — ${ok?'tersedia':'belum tersedia'}; klik untuk rincian" aria-label="${label}: ${ok?'tersedia':'belum tersedia'}" onclick="teacherFinalOpenDetail('${String(studentId).replace(/'/g,"\\'")}','${actId}')" class="inline-flex h-8 min-w-8 items-center justify-center rounded-lg border text-base font-black transition hover:scale-105 focus:outline-none focus:ring-2 focus:ring-emerald-400 ${ok?'border-emerald-200 bg-emerald-100 text-emerald-700':'border-slate-200 bg-slate-100 text-slate-400'}">${icon}</button>`;
             const rows = students.map((student, index) => {
                 const cells = activities.map(([actId, actName]) => {
                     const sub = teacherActivitySubmission(student, actId) || {};
@@ -4934,11 +4978,11 @@ function renderStudentActivityForm(actId) {
                     const evidence = teacherFinalHasValue(teacherFinalEvidenceValue(sub));
                     const self = teacherFinalHasValue(teacherFinalParse(sub.self_assessment ?? sub.selfAssessment ?? sub.self ?? answers.self_assessment ?? answers[`${actId}_self`]));
                     const peer = teacherFinalHasValue(teacherFinalParse(sub.peer_assessment ?? sub.peerAssessment ?? sub.peer ?? answers.peer_assessment ?? answers[`${actId}_peer`]));
-                    return `<td class="border border-slate-200 p-3 align-top"><div class="min-w-[125px]"><div class="mb-2 text-[10px] font-black text-slate-600">${actName}</div><div class="grid grid-cols-[1fr_auto] gap-x-2 gap-y-2 text-[10px]"><span>Bukti Belajar</span>${cell(evidence,'Bukti Belajar')}<span>Penilaian Diri</span>${cell(self,'Penilaian Diri')}<span>Penilaian Teman Sebaya</span>${cell(peer,'Penilaian Teman Sebaya')}</div><button onclick="teacherFinalOpenDetail('${String(student.id).replace(/'/g,"\\'")}','${actId}')" class="mt-2 w-full rounded-lg border border-sky-200 bg-sky-50 px-2 py-1.5 text-[10px] font-black text-sky-700">Lihat Detail</button></div></td>`;
+                    return `<td class="border border-slate-200 p-2 align-middle"><div class="min-w-[112px]"><div class="mb-2 text-center text-[10px] font-black text-slate-600">${actName}</div><div class="flex items-center justify-center gap-2">${cell(evidence,'📁','Bukti Belajar',student.id,actId)}${cell(self,'👤','Penilaian Diri',student.id,actId)}${cell(peer,'👥','Penilaian Teman',student.id,actId)}</div></div></td>`;
                 }).join('');
                 return `<tr class="border-b border-slate-100"><td class="sticky left-0 z-10 min-w-[190px] border border-slate-200 bg-white p-3 align-top"><div class="font-black text-slate-800">${index+1}. ${escapeHTML(student.nama)}</div><div class="mt-1 text-[10px] text-slate-500">${escapeHTML(student.kelas||'')} · ${escapeHTML(student.kelompok||'')}</div><div class="text-[10px] text-slate-400">${escapeHTML(student.nisn||'NISN tidak tersedia')}</div></td>${cells}</tr>`;
             }).join('');
-            return `<div class="space-y-4 text-slate-800">${teacherPortfolioBanner('PEMANTAUAN PEMBELAJARAN','Daftar Ceklis Pemantauan','Pantau kelengkapan Bukti Belajar, Penilaian Diri, dan Penilaian Teman Sebaya pada Aktivitas 1–5. Ceklis menunjukkan keberadaan data, bukan mutu capaian murid.','fa-list-check',['Pemantauan Aktivitas 1–5','Bukti belajar','Asesmen diri dan teman'])}<section class="rounded-2xl border border-emerald-100 bg-white p-4"><div class="mb-3 flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-lg font-black text-emerald-950">Matriks Ceklis Kelengkapan Murid</h2><p class="mt-1 text-xs text-slate-500">✓ = data terdeteksi · ✗ = data belum terdeteksi.</p></div><div class="flex flex-wrap items-center gap-2"><span class="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-800">${students.length} murid</span><button onclick="setTeacherMenu('penilaian_observasi')" class="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-black text-emerald-700">Buka Penilaian Subdimensi</button></div></div><div class="overflow-x-auto rounded-xl border border-slate-200"><table class="w-full min-w-[1150px] border-collapse text-left text-xs"><thead><tr class="bg-slate-100"><th rowspan="2" class="sticky left-0 z-20 min-w-[200px] border border-slate-200 bg-slate-100 p-3">Nama Murid</th><th colspan="5" class="border border-slate-200 p-2 text-center">AKTIVITAS 1–5</th></tr><tr class="bg-emerald-50">${activities.map(a=>`<th class="border border-slate-200 p-2 text-center">${a[1]}</th>`).join('')}</tr></thead><tbody>${rows || '<tr><td colspan="6" class="p-8 text-center text-slate-500">Belum ada data murid pada kelas tanggung jawab ini.</td></tr>'}</tbody></table></div><div class="mt-3 grid gap-2 text-[11px] text-slate-500 sm:grid-cols-3"><p>✓ Bukti Belajar: file, tautan, atau jawaban terdeteksi.</p><p>✓ Penilaian Diri: respons refleksi penilaian diri terdeteksi.</p><p>✓ Penilaian Teman Sebaya: respons penilaian teman terdeteksi.</p></div></section></div>`;
+            return `<div class="space-y-4 text-slate-800">${teacherPortfolioBanner('PEMANTAUAN PEMBELAJARAN','Daftar Ceklis Pemantauan','Pantau kelengkapan Bukti Belajar, Penilaian Diri, dan Penilaian Teman Sebaya pada Aktivitas 1–5. Ceklis menunjukkan keberadaan data, bukan mutu capaian murid.','fa-list-check',['Pemantauan Aktivitas 1–5','Bukti belajar','Asesmen diri dan teman'])}<section class="rounded-2xl border border-emerald-100 bg-white p-4"><div class="mb-3 flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-lg font-black text-emerald-950">Matriks Ceklis Kelengkapan Murid</h2><p class="mt-1 text-xs text-slate-500">📁 Bukti Belajar · 👤 Penilaian Diri · 👥 Penilaian Teman. Klik badge untuk membuka rincian aktivitas.</p></div><div class="flex flex-wrap items-center gap-2"><span class="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-800">${students.length} murid</span><button onclick="setTeacherMenu('penilaian_subdimensi')" class="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-black text-emerald-700">Buka Rekap Subdimensi APK</button></div></div><div class="overflow-x-auto rounded-xl border border-slate-200"><table class="w-full min-w-[1150px] border-collapse text-left text-xs"><thead><tr class="bg-slate-100"><th rowspan="2" class="sticky left-0 z-20 min-w-[200px] border border-slate-200 bg-slate-100 p-3">Nama Murid</th><th colspan="5" class="border border-slate-200 p-2 text-center">AKTIVITAS 1–5</th></tr><tr class="bg-emerald-50">${activities.map(a=>`<th class="border border-slate-200 p-2 text-center">${a[1]}</th>`).join('')}</tr></thead><tbody>${rows || '<tr><td colspan="6" class="p-8 text-center text-slate-500">Belum ada data murid pada kelas tanggung jawab ini.</td></tr>'}</tbody></table></div><div class="mt-3 grid gap-2 text-[11px] text-slate-500 sm:grid-cols-3"><p>✓ Bukti Belajar: file, tautan, atau jawaban terdeteksi.</p><p>✓ Penilaian Diri: respons refleksi penilaian diri terdeteksi.</p><p>✓ Penilaian Teman Sebaya: respons penilaian teman terdeteksi.</p></div></section></div>`;
         }
 
         function renderTeacherMenuView(menu) {
@@ -5309,11 +5353,11 @@ function renderStudentActivityForm(actId) {
         function renderStudentGroupsTable(savedRows) {
             const modal=document.getElementById('srl-student-groups-modal'); if(!modal) return;
             const students=JSON.parse(modal.dataset.students||'[]');
-            const savedByNisn=new Map((Array.isArray(savedRows)?savedRows:[]).map(x=>[String(x.nisn||''),x]));
+            const savedByNisn=new Map((Array.isArray(savedRows)?savedRows:[]).map(x=>[String(x.nisn||x.studentId||''),x]));
             const groupOptions=[...new Set(['Belum Ada Kelompok',...Array.from({length:Math.max(2,Math.ceil(students.length/2))},(_,i)=>`Kelompok ${i+1}`)])];
             const body=document.getElementById('srl-groups-table-body'); if(!body)return;
             body.innerHTML=students.map((s,i)=>{
-                const saved=savedByNisn.get(String(s.nisn||''))||{};
+                const saved=savedByNisn.get(String(s.nisn||s.id||''))||{};
                 const hadir=String(saved.attendance||'Hadir').toLowerCase()!=='tidak sekolah';
                 const group=String(saved.kelompokName||s.kelompok||'Belum Ada Kelompok');
                 return `<tr class="border-b border-slate-100 ${hadir?'':'bg-amber-50/70'}"><td class="px-3 py-2 text-xs text-slate-500">${i+1}</td><td class="px-3 py-2"><div class="font-bold text-slate-800 text-sm">${escapeHTML(s.nama)}</div><div class="text-[10px] text-slate-400">${escapeHTML(s.nisn||'ID murid: '+s.id)}</div></td><td class="px-3 py-2"><label class="flex items-center gap-2 text-xs font-bold ${hadir?'text-emerald-700':'text-amber-700'}"><input type="checkbox" data-srl-group-attendance="${escapeHTML(String(s.nisn||s.id))}" ${hadir?'checked':''} class="accent-emerald-600" onchange="toggleStudentGroupAttendance(this)"> ${hadir?'Hadir':'Tidak Sekolah'}</label></td><td class="px-3 py-2"><select data-srl-group-student="${escapeHTML(String(s.nisn||s.id))}" ${hadir?'':'disabled'} class="w-full min-w-36 rounded-lg border border-slate-300 bg-white p-2 text-xs font-semibold disabled:bg-slate-100">${groupOptions.map(g=>`<option value="${escapeHTML(g)}" ${g===group?'selected':''}>${escapeHTML(g)}</option>`).join('')}</select></td></tr>`;
@@ -5332,7 +5376,7 @@ function renderStudentActivityForm(actId) {
             const body=document.getElementById('srl-groups-table-body');
             if(body)body.innerHTML='<tr><td colspan="4" class="p-5 text-center text-sm text-slate-500">Memuat data pertemuan...</td></tr>';
             try {
-                const result=await apiCall('getStudentGroups',{meetingId});
+                const result=await apiCall('getStudentGroups',{meetingId,teacherClass:getTeacherAssignedClass(),teacherUsername:state.teacherAuth?.nip||''});
                 renderStudentGroupsTable(result?.success&&Array.isArray(result.groups)?result.groups:[]);
             } catch(err) { console.warn('Kelompok pertemuan belum dapat dimuat:',err); renderStudentGroupsTable([]); }
         }
@@ -5359,7 +5403,7 @@ function renderStudentActivityForm(actId) {
             if(random&&presentGroups.length) {
                 for(let i=presentGroups.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[presentGroups[i],presentGroups[j]]=[presentGroups[j],presentGroups[i]];}
                 const groupCount=Math.max(1,Math.ceil(presentGroups.length/capacity));
-                presentGroups.forEach((g,i)=>{g.kelompokName=`Kelompok ${(i%groupCount)+1}`;});
+                presentGroups.forEach((g,i)=>{g.kelompokName=`Kelompok ${Math.min(groupCount,Math.floor(i/capacity)+1)}`;});
                 const assigned=new Map(presentGroups.map(g=>[String(g.nisn||g.studentId),g.kelompokName]));
                 groups=groups.map(g=>g.attendance==='Hadir'?({...g,kelompokName:assigned.get(String(g.nisn||g.studentId))}):g);
             }
