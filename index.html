@@ -1089,6 +1089,121 @@
             }
         };
 
+        const PORTAL_SESSION_STORAGE_KEY = 'portal_srl_active_session_v2';
+        function persistPortalSession() {
+            try {
+                const isTeacher = !!(state.teacherAuth && state.teacherAuth.nip && state.teacherAuth.token);
+                const isStudent = !!(state.student && state.student.isLoggedIn && state.student.nisn);
+                if (!isTeacher && !isStudent) return;
+                const session = {
+                    isLoggedIn: true,
+                    role: isTeacher ? 'guru' : 'murid',
+                    currentView: isTeacher ? 'guru_board' : 'murid_board',
+                    activeTab: isTeacher ? (state.teacher.currentMenu || 'beranda') : (state.student.currentSection || 'beranda'),
+                    userProfile: isTeacher ? {
+                        nip: state.teacherAuth.nip, token: state.teacherAuth.token,
+                        nama: state.teacherAuth.nama, kelas: state.teacherAuth.kelas
+                    } : {
+                        nisn: state.student.nisn, nama: state.student.name,
+                        kelas: state.student.kelas, absen: state.student.absen,
+                        kelompok: state.student.kelompok, topik: state.student.topik
+                    },
+                    teacherSettings: isTeacher ? {
+                        teacherDisplayName: state.teacherSettings?.teacherDisplayName || '',
+                        teacherUsername: state.teacherSettings?.teacherUsername || state.teacherAuth.nip,
+                        teacherClass: state.teacherSettings?.teacherClass || state.teacherAuth.kelas,
+                        schoolName: state.teacherSettings?.schoolName || '',
+                        selectedTopik: state.teacherSettings?.selectedTopik || ''
+                    } : null,
+                    savedAt: new Date().toISOString()
+                };
+                localStorage.setItem(PORTAL_SESSION_STORAGE_KEY, JSON.stringify(session));
+            } catch (e) { console.warn('Sesi PORTAL-SRL tidak dapat disimpan pada browser.', e); }
+        }
+        function clearPortalSession() {
+            try { localStorage.removeItem(PORTAL_SESSION_STORAGE_KEY); } catch (e) {}
+        }
+        async function restorePortalSessionOnLoad() {
+            let saved = null;
+            try { saved = JSON.parse(localStorage.getItem(PORTAL_SESSION_STORAGE_KEY) || 'null'); } catch (e) {}
+            if (!saved || saved.isLoggedIn !== true || !saved.userProfile) {
+                clearPortalSession();
+                render();
+                return;
+            }
+            if (saved.role === 'guru' && saved.userProfile.nip && saved.userProfile.token) {
+                state.teacherAuth = {
+                    nip: String(saved.userProfile.nip || ''),
+                    token: String(saved.userProfile.token || ''),
+                    nama: String(saved.userProfile.nama || ''),
+                    kelas: String(saved.userProfile.kelas || '')
+                };
+                state.teacherSettings = { ...state.teacherSettings, ...(saved.teacherSettings || {}) };
+                state.teacherSettings.teacherDisplayName = String(state.teacherSettings.teacherDisplayName || state.teacherAuth.nama || '');
+                state.teacherSettings.teacherUsername = String(state.teacherSettings.teacherUsername || state.teacherAuth.nip);
+                state.teacherSettings.teacherClass = String(state.teacherSettings.teacherClass || state.teacherAuth.kelas);
+                state.teacher.currentMenu = String(saved.activeTab || 'beranda');
+                state.currentView = 'guru_board';
+                render();
+                startTeacherNotificationPolling();
+                Promise.resolve().then(async () => {
+                    try {
+                        await Promise.allSettled([
+                            fetchTeacherBoardData(),
+                            (async () => {
+                                const profileResult = await apiCall('getTeacherSchoolProfile', {
+                                    teacherUsername: state.teacherAuth.nip, teacherEmail: state.teacherAuth.nip,
+                                    email: state.teacherAuth.nip, nip: state.teacherAuth.nip, user_id: state.teacherAuth.nip
+                                });
+                                if (profileResult && (profileResult.status === 'success' || profileResult.success === true) && (profileResult.profile || profileResult.data)) {
+                                    applyTeacherSchoolProfile(profileResult.profile || profileResult.data);
+                                    state.teacherSettings.teacherDisplayName = String(state.teacherSettings.teacherDisplayName || state.teacherAuth.nama || '').trim();
+                                    const nameInput = document.getElementById('inputNamaGuru');
+                                    if (nameInput && state.teacherSettings.teacherDisplayName) nameInput.value = state.teacherSettings.teacherDisplayName;
+                                    renderTeacherBoard();
+                                }
+                            })()
+                        ]);
+                    } catch (e) { console.warn('Pemulihan data sesi guru tertunda:', e); }
+                });
+                return;
+            }
+            if (saved.role === 'murid' && saved.userProfile.nisn) {
+                const u = saved.userProfile;
+                state.student.isLoggedIn = true;
+                state.student.nisn = String(u.nisn || '');
+                state.student.name = String(u.nama || '');
+                state.student.kelas = String(u.kelas || '');
+                state.student.absen = String(u.absen || '');
+                state.student.kelompok = String(u.kelompok || '');
+                state.student.topik = String(u.topik || state.teacherSettings.selectedTopik || '');
+                state.student.currentSection = String(saved.activeTab || 'beranda');
+                state.currentView = 'murid_board';
+                render();
+                Promise.resolve().then(async () => {
+                    try {
+                        const dataRes = await apiCall('getStudentData', { nisn: state.student.nisn });
+                        if (dataRes && dataRes.status === 'success') {
+                            if (dataRes.progress) state.student.progress = { ...state.student.progress, ...dataRes.progress };
+                            if (dataRes.answers) state.student.answers = dataRes.answers;
+                        }
+                        const peersRes = await apiCall('getStudentPeers', { nisn: state.student.nisn });
+                        state.student.peers = peersRes?.status === 'success' && Array.isArray(peersRes.students) ? peersRes.students : [];
+                        state.student.peersLoaded = !!(peersRes && peersRes.status === 'success');
+                        state.student.groupsByMeeting = state.student.groupsByMeeting || {};
+                        await Promise.all(['pertemuan1','pertemuan2','pertemuan3'].map(async meetingId => {
+                            const groupRes = await apiCall('getStudentGroups', { meetingId, nisn: state.student.nisn });
+                            if (groupRes?.success && Array.isArray(groupRes.groups)) state.student.groupsByMeeting[meetingId] = groupRes.groups;
+                        }));
+                        if (state.currentView === 'murid_board') renderStudentBoard();
+                    } catch (e) { console.warn('Pemulihan data sesi murid tertunda:', e); }
+                });
+                return;
+            }
+            clearPortalSession();
+            render();
+        }
+
         // Overlay layar penuh dinonaktifkan untuk menjaga navigasi dan pembacaan data tetap silent.
         function showSpinner() { /* Sengaja tidak menampilkan overlay full-screen. */ }
         function hideSpinner() { /* Dipertahankan agar pemanggil lama tetap kompatibel. */ }
@@ -1483,7 +1598,7 @@
         const API_SESSION_MUTATING_ACTIONS = new Set([
             'saveStudentSubmission', 'addTeacherStudent', 'addStudent', 'updateTeacherStudent', 'updateStudent',
             'saveTeacherClass', 'savePengaturan', 'saveTeacherSettings', 'saveStimulasiContent',
-            'saveRoomLearningContent', 'saveRestrictionStatus', 'saveTeacherEvaluation',
+            'saveRoomLearningContent', 'saveStimulasiData', 'saveRuangBelajarData', 'saveRestrictionStatus', 'saveTeacherEvaluation',
             'saveTeacherActivityAssessment', 'saveTeacherFinalCapaian', 'saveTeacherFeedback', 'savePortfolioAssessment',
             'uploadFileToDrive', 'uploadGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile', 'saveStudentGroups'
         ]);
@@ -1530,7 +1645,7 @@
                 ? beginButtonLoading(document.activeElement)
                 : null;
             try {
-                const protectedTeacherActions = ['getTeacherData', 'getTeacherSchoolProfile', 'saveTeacherSchoolProfile', 'addTeacherStudent', 'updateTeacherStudent', 'saveTeacherClass', 'saveTeacherSettings', 'saveRoomLearningContent', 'saveStimulasiContent', 'saveTeacherEvaluation', 'savePortfolioAssessment', 'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'getGuideResources', 'uploadGuideResource', 'getTeacherNotifications', 'markTeacherNotificationRead'];
+                const protectedTeacherActions = ['getTeacherData', 'getTeacherSchoolProfile', 'saveTeacherSchoolProfile', 'addTeacherStudent', 'updateTeacherStudent', 'saveTeacherClass', 'saveTeacherSettings', 'saveRoomLearningContent', 'saveStimulasiContent', 'saveStimulasiData', 'saveRuangBelajarData', 'saveTeacherEvaluation', 'savePortfolioAssessment', 'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'getGuideResources', 'uploadGuideResource', 'getTeacherNotifications', 'markTeacherNotificationRead'];
                 const requestPayload = { ...payload };
                 if (protectedTeacherActions.includes(action) && state.teacherAuth && state.teacherAuth.token) {
                     requestPayload.teacherToken = state.teacherAuth.token;
@@ -1824,6 +1939,8 @@
             state.student.nisn = userId;
             state.student.kelompok = verifiedStudent.kelompok || 'Belum Ada Kelompok';
             state.student.topik = state.teacherSettings.selectedTopik;
+            // Simpan sesi segera setelah autentikasi murid terverifikasi, sebelum permintaan data lanjutan.
+            persistPortalSession();
 
             await apiCall('login', { user_id: userId, nama: verifiedStudent.nama, kelas: verifiedStudent.kelas, absen: verifiedStudent.absen || '' });
 
@@ -1938,9 +2055,14 @@
                 };
                 const profileIdentity = String(state.teacherAuth.nip || username || '').trim();
                 state.teacherSettings.teacherUsername = profileIdentity;
-                state.teacherSettings.teacherDisplayName = '';
+                state.teacherSettings.teacherDisplayName = String((res.data && res.data.nama) || res.nama || state.teacherAuth.nama || '').trim();
                 state.teacherSettings.teacherClass = state.teacherAuth.kelas;
                 resetTeacherSchoolProfile();
+                state.teacherSettings.teacherDisplayName = String((res.data && res.data.nama) || res.nama || state.teacherAuth.nama || '').trim();
+                state.teacherSettings.teacherUsername = profileIdentity;
+                state.teacherSettings.teacherClass = state.teacherAuth.kelas;
+                // Simpan token sesi dan identitas segera setelah login guru berhasil.
+                persistPortalSession();
                 // Transisi UI tidak menunggu data dashboard/profil yang berat.
                 closeLoginGuruModal();
                 const loginPopup = document.getElementById('login-guru-popup');
@@ -2063,6 +2185,11 @@
         }
 
         function logout() {
+            try {
+                const activeTeacherToken = String(state.teacherAuth?.token || '').trim();
+                if (activeTeacherToken) apiCall('logoutTeacherSession', { teacherToken: activeTeacherToken }).catch(err => console.warn('Sesi server belum dapat ditutup:', err));
+            } catch (e) {}
+            clearPortalSession();
             if (teacherNotificationPollTimer) {
                 clearInterval(teacherNotificationPollTimer);
                 teacherNotificationPollTimer = null;
@@ -2302,6 +2429,8 @@
 
         function setTeacherMenu(menuKey) {
             state.teacher.currentMenu = menuKey;
+            persistPortalSession();
+            if (String(menuKey).startsWith('penilaian') || menuKey === 'ceklist_pemantauan') state.teacher.penilaianOpen = true;
             if (['act1','act2','act3','act4','act5'].includes(menuKey)) {
                 teacherActivityState.selectedStudentId = Number(state.teacher.selectedStudentId || 1);
                 teacherActivityState.tab = 'Bukti Belajar';
@@ -2330,6 +2459,7 @@
         }
 
         function render() {
+            persistPortalSession();
             const app = document.getElementById('app');
             if(!app) return;
             // Hujan daun dari atas hingga bawah layar hanya untuk tampilan awal.
@@ -2584,6 +2714,7 @@
 
         // DASHBOARD MURID
         function renderStudentBoard() {
+            persistPortalSession();
             const container = document.getElementById('murid-board-container');
             if(!container) return;
 
@@ -4014,6 +4145,7 @@ function renderStudentActivityForm(actId) {
         // PORTAL GURU BOARD
         // =========================================================================
         function renderTeacherBoard() {
+            persistPortalSession();
             const container = document.getElementById('guru-board-container');
             if(!container) return;
 
@@ -4069,7 +4201,7 @@ function renderStudentActivityForm(actId) {
 
                                 <!-- MENU ACCORDION PENILAIAN -->
                                 <div>
-                                    <button onclick="togglePenilaianAccordion()" class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${currentMenu.startsWith('penilaian') ? 'text-[#00a664] font-bold bg-emerald-50' : 'hover:bg-slate-100 text-slate-600'}">
+                                    <button onclick="togglePenilaianAccordion()" class="w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all ${(currentMenu.startsWith('penilaian') || currentMenu==='ceklist_pemantauan') ? 'text-[#00a664] font-bold bg-emerald-50' : 'hover:bg-slate-100 text-slate-600'}">
                                         <div class="flex items-center gap-3">
                                             <i class="fa-solid fa-chart-column w-4 text-center"></i>
                                             <span>Penilaian</span>
@@ -4081,7 +4213,9 @@ function renderStudentActivityForm(actId) {
                                             <button onclick="setTeacherMenu('penilaian_observasi')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_observasi'?'text-[#00a664] font-bold':''}">Observasi Guru</button>
                                             <button onclick="setTeacherMenu('penilaian_diri')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_diri'?'text-[#00a664] font-bold':''}">Penilaian Diri Murid</button>
                                             <button onclick="setTeacherMenu('penilaian_sebaya')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_sebaya'?'text-[#00a664] font-bold':''}">Penilaian Teman Sebaya</button>
-                                            <button onclick="setTeacherMenu('penilaian_rekap')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_rekap'?'text-[#00a664] font-bold':''}">Rekap Nilai</button>
+                                            <button onclick="setTeacherMenu('penilaian_rekap')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_rekap'?'text-[#00a664] font-bold':''}">Rekap Nilai Akhir & Kelengkapan</button>
+                                            <button onclick="setTeacherMenu('penilaian_subdimensi')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='penilaian_subdimensi'?'text-[#00a664] font-bold':''}">Rekap Subdimensi APK</button>
+                                            <button onclick="setTeacherMenu('ceklist_pemantauan')" class="w-full text-left py-1.5 px-2.5 rounded-lg hover:bg-slate-100 hover:text-slate-800 ${currentMenu==='ceklist_pemantauan'?'text-[#00a664] font-bold':''}">Daftar Ceklis Pemantauan</button>
                                         </div>
                                     ` : ''}
                                 </div>
@@ -4261,11 +4395,23 @@ function renderStudentActivityForm(actId) {
             let local = {};
             try { local = JSON.parse(sessionStorage.getItem('portalSrlPortfolioAssessment') || '{}') || {}; } catch(e) {}
             const server = state.teacherDataCache.portfolioAssessment || {};
+            const normalizeBucket = (kind) => {
+                const merged = { ...(local[kind] || {}) };
+                Object.values(server[kind] || {}).forEach(record => {
+                    if (!record) return;
+                    const student = teacherActivityStudents().find(s => String(s.nisn || '') === String(record.nisn || '') || String(s.id) === String(record.studentId || ''));
+                    const studentId = student ? student.id : record.studentId;
+                    const activity = String(record.activity || 'all');
+                    const key = `${kind}_${activity}_${studentId}`;
+                    merged[key] = { ...record, studentId: studentId, nisn: String(record.nisn || student?.nisn || ''), activity: activity };
+                });
+                return merged;
+            };
             state.teacherDataCache.portfolioAssessment = {
-                observation:{...(local.observation||{}),...(server.observation||{})},
-                self:{...(local.self||{}),...(server.self||{})},
-                peer:{...(local.peer||{}),...(server.peer||{})},
-                recap:{...(local.recap||{}),...(server.recap||{})}
+                observation: normalizeBucket('observation'),
+                self: normalizeBucket('self'),
+                peer: normalizeBucket('peer'),
+                recap: normalizeBucket('recap')
             };
             return state.teacherDataCache.portfolioAssessment;
         }
@@ -4273,7 +4419,8 @@ function renderStudentActivityForm(actId) {
             const store=state.teacherDataCache.portfolioAssessment || {observation:{},self:{},peer:{},recap:{}};
             try { sessionStorage.setItem('portalSrlPortfolioAssessment', JSON.stringify(store)); } catch(e) {}
             if (!kind || !record || !['observation','recap'].includes(kind)) return;
-            const payload = {kind, nisn:String(record.studentId||''), act_id:String(record.activity||''), values:record.values||{}, notes:record.notes||''};
+            const student = teacherActivityStudents().find(s => String(s.id) === String(record.studentId));
+            const payload = {kind, nisn:String(student?.nisn || record.nisn || record.studentId || '').trim(), student_id:String(record.studentId||''), act_id:String(record.activity||''), values:record.values||{}, notes:record.notes||''};
             apiCall('savePortfolioAssessment', payload).then(res => {
                 if (!res || res.status !== 'success') {
                     console.error('Gagal menyimpan asesmen ke Google Sheets:', res && res.message);
@@ -4449,7 +4596,7 @@ function renderStudentActivityForm(actId) {
             if(kind==='recap') {
                 const rows=students.map((s,i)=>{
                     const rec=store.recap[`recap_all_${s.id}`]||{values:{},notes:''};
-                    const levels=teacherAssessmentSubdimensions.map(x=>`<label class="block min-w-[190px] text-[10px] font-bold text-slate-600">${escapeHTML(x.dimension)}<br><span class="text-slate-800">${escapeHTML(x.sub)}</span><select onchange="teacherAssessmentSave('recap',${s.id},'all','${x.sub}',this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white p-2 text-xs"><option value="">Belum ditetapkan</option>${['Berkembang','Cakap','Mahir'].map(l=>`<option ${rec.values?.[x.sub]===l?'selected':''}>${l}</option>`).join('')}</select><span class="font-normal text-slate-400">Aktivitas: ${x.acts}</span></label>`).join('');
+                    const levels=teacherAssessmentSubdimensions.map(x=>`<label class="block min-w-[190px] text-[10px] font-bold text-slate-600">${escapeHTML(x.dimension)}<br><span class="text-slate-800">${escapeHTML(x.sub)}</span><select onchange="teacherAssessmentSave('recap',${s.id},'all','${x.sub}',this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white p-2 text-xs"><option value="">Belum ditetapkan</option>${['Berkembang','Cakap','Mahir'].map(l=>`<option value="${l}" ${rec.values?.[x.sub]===l?'selected':''}>${l.toUpperCase()}</option>`).join('')}</select><span class="font-normal text-slate-400">Aktivitas: ${x.acts}</span></label>`).join('');
                     return `<tr class="border-b border-sky-50 align-top"><td class="p-3">${i+1}</td><td class="p-3 min-w-[150px]"><b>${escapeHTML(s.nama)}</b><div class="text-[10px] text-slate-500">${escapeHTML(s.kelas)} · ${escapeHTML(s.kelompok)}</div></td><td class="p-3"><div class="grid grid-cols-1 lg:grid-cols-3 gap-2">${levels}</div><textarea onchange="teacherAssessmentSaveNote('recap',${s.id},'all',this.value)" placeholder="Catatan bukti dan tindak lanjut..." class="mt-2 w-full rounded-lg border border-sky-200 p-2 text-xs">${escapeHTML(rec.notes||'')}</textarea></td></tr>`;
                 }).join('');
                 const observationRecapRows = students.map((s,i)=>{
@@ -4662,19 +4809,26 @@ function renderStudentActivityForm(actId) {
           }
         }
 
-        const TEACHER_SCHOOL_KEYS = ['schoolName','npsn','schoolAddress','principal','principalNip','schoolDescription','logoUrl'];
+        const TEACHER_SCHOOL_KEYS = ['schoolName','npsn','schoolAddress','principal','principalNip','schoolYear','schoolDescription','teacherDisplayName','teacherUsername','teacherRole','teacherClass','selectedTopik','headerImage','logoUrl','themeColor'];
         function resetTeacherSchoolProfile(){
           if(!state.teacherSettings)state.teacherSettings={};
           TEACHER_SCHOOL_KEYS.forEach(k=>state.teacherSettings[k]='');
         }
         function applyTeacherSchoolProfile(profile){
+          profile = profile && typeof profile === 'object' ? profile : {};
           resetTeacherSchoolProfile();
           TEACHER_SCHOOL_KEYS.forEach(k=>state.teacherSettings[k]=String(profile[k]??''));
+          // Nama tetap terisi jika respons profil versi lama tidak membawa field nama.
+          state.teacherSettings.teacherDisplayName = String(profile.teacherDisplayName || profile.namaGuru || profile.nama_guru || profile.nama || state.teacherAuth?.nama || state.teacherSettings.teacherDisplayName || '').trim();
+          state.teacherSettings.teacherUsername = String(profile.teacherUsername || state.teacherAuth?.nip || '').trim();
+          state.teacherSettings.teacherClass = String(profile.teacherClass || state.teacherAuth?.kelas || '').trim();
         }
         async function saveTeacherSettingsPage(){
           const val=id=>document.getElementById(id)?.value??'';const t=state.teacherSettings;
-          t.schoolName=val('settings-school-name');t.npsn=val('settings-npsn');t.schoolAddress=val('settings-address');t.principal=val('settings-principal');t.principalNip=val('settings-principal-nip').trim();t.schoolYear=val('settings-year');t.schoolDescription=val('settings-description');t.teacherDisplayName=val('settings-teacher-name').trim();t.teacherUsername=val('settings-username').trim()||String(state.teacherAuth?.nip||'').trim();t.teacherClass=getTeacherAssignedClass();t.selectedTopik=val('settings-topic')||t.selectedTopik;if(document.getElementById('settings-header-image'))t.headerImage=val('settings-header-image');t.logoUrl=val('settings-logo-url')||t.logoUrl||'';const color=document.querySelector('input[name="settings-theme"]:checked');if(color)t.themeColor=color.value;
+          t.schoolName=val('settings-school-name');t.npsn=val('settings-npsn');t.schoolAddress=val('settings-address');t.principal=val('settings-principal');t.principalNip=val('settings-principal-nip').trim();t.schoolYear=val('settings-year');t.schoolDescription=val('settings-description');t.teacherDisplayName=val('inputNamaGuru').trim()||String(t.teacherDisplayName||state.teacherAuth?.nama||'').trim();t.teacherUsername=val('settings-username').trim()||String(state.teacherAuth?.nip||'').trim();t.teacherClass=getTeacherAssignedClass();t.selectedTopik=val('settings-topic')||t.selectedTopik;if(document.getElementById('settings-header-image'))t.headerImage=val('settings-header-image');t.logoUrl=val('settings-logo-url')||t.logoUrl||'';const color=document.querySelector('input[name="settings-theme"]:checked');if(color)t.themeColor=color.value;
           const profile = Object.fromEntries(TEACHER_SCHOOL_KEYS.map(k=>[k,t[k]||'']));
+          profile.teacherDisplayName = String(val('inputNamaGuru').trim() || t.teacherDisplayName || state.teacherAuth?.nama || '').trim();
+          profile.namaGuru = profile.teacherDisplayName;
           profile.teacherUsername = String(t.teacherUsername || state.teacherAuth?.nip || '').trim();
           if (!profile.teacherUsername) { showModal('Identitas Guru Tidak Ditemukan','Silakan login ulang sebelum menyimpan profil.','error'); return; }
           const profileSaved = await apiCall('saveTeacherSchoolProfile',{profile, teacherUsername:profile.teacherUsername});
@@ -4685,6 +4839,7 @@ function renderStudentActivityForm(actId) {
           }
           // Backend baru mengembalikan data; backend lama mungkin mengembalikan profile.
           applyTeacherSchoolProfile(profileSaved.profile || profileSaved.data || profile);
+          if (state.teacherSettings.teacherDisplayName) state.teacherAuth.nama = state.teacherSettings.teacherDisplayName;
           state.teacherProfileNeedsSetup = false;
           savePortalProfile({name:t.teacherDisplayName||'',role:t.teacherClass||state.teacherAuth?.kelas||'',school:t.schoolName||'',email:'',avatar:''});
           renderTeacherBoard();
@@ -4715,8 +4870,8 @@ function renderStudentActivityForm(actId) {
           const yearField=()=>`<label class="block text-[11px] font-bold text-slate-700">Tahun Ajaran Aktif<select id="settings-year" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-normal">${getAcademicYearOptions(t.schoolYear||'2026/2027').map(y=>`<option value="${y}" ${String(t.schoolYear||'2026/2027')===y?'selected':''}>${y}</option>`).join('')}</select><small class="mt-1 block font-normal text-slate-500">Pilihan ini berlaku untuk seluruh tampilan PORTAL-SRL.</small></label>`;
           let panel='';
           const profileSetupNotice = state.teacherProfileNeedsSetup ? `<div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900"><b>Profil sekolah belum tersimpan untuk akun ini.</b><br>Silakan lengkapi data pada formulir di bawah, lalu tekan Simpan/Perbarui. Data akan diperbarui berdasarkan ID akun guru agar tidak membuat profil ganda.</div>` : '';
-          if(teacherSettingsTab==='sekolah')panel=`${profileSetupNotice}<div class="grid gap-4 lg:grid-cols-2"><section class="rounded-2xl border bg-white p-4"><h3 class="font-black"><i class="fa-solid fa-school mr-2 text-emerald-600"></i>Profil Sekolah</h3><p class="mb-4 mt-1 text-[10px] text-slate-500">Informasi dasar sekolah yang ditampilkan pada portal.</p><div class="grid gap-3 sm:grid-cols-2">${field('Nama Sekolah','settings-school-name',t.schoolName||'')}${field('NPSN','settings-npsn',t.npsn||'')}${field('Alamat','settings-address',t.schoolAddress||'')}${field('Nama Kepala Sekolah','settings-principal',t.principal||'')}${field('NIP Kepala Sekolah','settings-principal-nip',t.principalNip||'','Masukkan NIP kepala sekolah')}${yearField()}<div class="sm:col-span-2"><label for="settings-school-logo-file" class="block text-[11px] font-bold text-slate-700">Upload Logo Sekolah<input id="settings-school-logo-file" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onchange="handleSchoolLogoUpload(this)" class="mt-1 block w-full cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-normal file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-600 file:px-3 file:py-2 file:font-bold file:text-white"><small class="mt-1 block font-normal text-slate-500">Pilih file gambar logo sekolah. Logo akan diperkecil otomatis agar mudah disimpan.</small></label><input type="hidden" id="settings-logo-url" value="${escapeHTML(t.logoUrl||'')}"><div id="settings-school-logo-preview" class="mt-2 ${t.logoUrl?'':'hidden'} rounded-xl border border-emerald-100 bg-emerald-50 p-3"><img src="${escapeHTML(t.logoUrl||'')}" alt="Pratinjau logo sekolah" class="max-h-20 max-w-40 object-contain"></div></div></div><label class="mt-3 block text-[11px] font-bold">Deskripsi Singkat<textarea id="settings-description" rows="3" class="mt-1 w-full rounded-lg border p-3 text-xs">${escapeHTML(t.schoolDescription||'')}</textarea></label></section><section class="rounded-2xl border bg-white p-4"><h3 class="font-black"><i class="fa-solid fa-user-gear mr-2 text-sky-600"></i>Profil Guru</h3><p class="mb-4 mt-1 text-[10px] text-slate-500">Informasi akun guru yang aktif.</p><div class="grid gap-3">${field('Nama Guru','settings-teacher-name',t.teacherDisplayName||'','Masukkan nama lengkap guru')}${field('Username / NIP','settings-username',t.teacherUsername||state.teacherAuth?.nip||'','NIP akun guru')}<div class="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs"><b class="text-emerald-900">Kelas Tanggung Jawab</b><p class="mt-1 text-emerald-800">${escapeHTML(getTeacherAssignedClass() || 'Belum diatur. Buka tab Kelas & Kelompok untuk menetapkan kelas.')}</p></div></div></section></div>`;
-          else if(teacherSettingsTab==='pengguna')panel=`<div class="grid gap-4 lg:grid-cols-2"><section class="rounded-2xl border bg-white p-4"><h3 class="font-black">Data Akun Guru</h3><div class="mt-4 grid gap-3">${field('Nama Guru','settings-teacher-name',t.teacherDisplayName||'','Masukkan nama lengkap guru')}${field('Username / NIP','settings-username',t.teacherUsername||state.teacherAuth?.nip||'','NIP akun guru')}<p class="rounded-xl bg-amber-50 p-3 text-xs text-amber-900">Pembuatan dan penghapusan akun membutuhkan backend dengan pengaturan hak akses.</p></div></section><section class="rounded-2xl border bg-white p-4"><h3 class="font-black">Jenis Pengguna</h3><div class="mt-3 grid gap-3 sm:grid-cols-3">${[['Guru','fa-user-tie','Mengelola aktivitas dan asesmen'],['Siswa','fa-user-graduate','Mengerjakan aktivitas dan mengunggah bukti'],['Orang Tua','fa-house-user','Mendukung pemantauan murid']].map(([a,b,c])=>`<div class="rounded-xl border bg-slate-50 p-3 text-center"><i class="fa-solid ${b} text-2xl text-sky-600"></i><b class="mt-2 block text-xs">${a}</b><p class="mt-1 text-[10px] text-slate-500">${c}</p></div>`).join('')}</div></section></div>`;
+          if(teacherSettingsTab==='sekolah')panel=`${profileSetupNotice}<div class="grid gap-4 lg:grid-cols-2"><section class="rounded-2xl border bg-white p-4"><h3 class="font-black"><i class="fa-solid fa-school mr-2 text-emerald-600"></i>Profil Sekolah</h3><p class="mb-4 mt-1 text-[10px] text-slate-500">Informasi dasar sekolah yang ditampilkan pada portal.</p><div class="grid gap-3 sm:grid-cols-2">${field('Nama Sekolah','settings-school-name',t.schoolName||'')}${field('NPSN','settings-npsn',t.npsn||'')}${field('Alamat','settings-address',t.schoolAddress||'')}${field('Nama Kepala Sekolah','settings-principal',t.principal||'')}${field('NIP Kepala Sekolah','settings-principal-nip',t.principalNip||'','Masukkan NIP kepala sekolah')}${yearField()}<div class="sm:col-span-2"><label for="settings-school-logo-file" class="block text-[11px] font-bold text-slate-700">Upload Logo Sekolah<input id="settings-school-logo-file" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" onchange="handleSchoolLogoUpload(this)" class="mt-1 block w-full cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-normal file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-600 file:px-3 file:py-2 file:font-bold file:text-white"><small class="mt-1 block font-normal text-slate-500">Pilih file gambar logo sekolah. Logo akan diperkecil otomatis agar mudah disimpan.</small></label><input type="hidden" id="settings-logo-url" value="${escapeHTML(t.logoUrl||'')}"><div id="settings-school-logo-preview" class="mt-2 ${t.logoUrl?'':'hidden'} rounded-xl border border-emerald-100 bg-emerald-50 p-3"><img src="${escapeHTML(t.logoUrl||'')}" alt="Pratinjau logo sekolah" class="max-h-20 max-w-40 object-contain"></div></div></div><label class="mt-3 block text-[11px] font-bold">Deskripsi Singkat<textarea id="settings-description" rows="3" class="mt-1 w-full rounded-lg border p-3 text-xs">${escapeHTML(t.schoolDescription||'')}</textarea></label></section><section class="rounded-2xl border bg-white p-4"><h3 class="font-black"><i class="fa-solid fa-user-gear mr-2 text-sky-600"></i>Profil Guru</h3><p class="mb-4 mt-1 text-[10px] text-slate-500">Informasi akun guru yang aktif.</p><div class="grid gap-3">${field('Nama Guru','inputNamaGuru',t.teacherDisplayName||'','Masukkan nama lengkap guru')}${field('Username / NIP','settings-username',t.teacherUsername||state.teacherAuth?.nip||'','NIP akun guru')}<div class="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-xs"><b class="text-emerald-900">Kelas Tanggung Jawab</b><p class="mt-1 text-emerald-800">${escapeHTML(getTeacherAssignedClass() || 'Belum diatur. Buka tab Kelas & Kelompok untuk menetapkan kelas.')}</p></div></div></section></div>`;
+          else if(teacherSettingsTab==='pengguna')panel=`<div class="grid gap-4 lg:grid-cols-2"><section class="rounded-2xl border bg-white p-4"><h3 class="font-black">Data Akun Guru</h3><div class="mt-4 grid gap-3">${field('Nama Guru','inputNamaGuru',t.teacherDisplayName||'','Masukkan nama lengkap guru')}${field('Username / NIP','settings-username',t.teacherUsername||state.teacherAuth?.nip||'','NIP akun guru')}<p class="rounded-xl bg-amber-50 p-3 text-xs text-amber-900">Pembuatan dan penghapusan akun membutuhkan backend dengan pengaturan hak akses.</p></div></section><section class="rounded-2xl border bg-white p-4"><h3 class="font-black">Jenis Pengguna</h3><div class="mt-3 grid gap-3 sm:grid-cols-3">${[['Guru','fa-user-tie','Mengelola aktivitas dan asesmen'],['Siswa','fa-user-graduate','Mengerjakan aktivitas dan mengunggah bukti'],['Orang Tua','fa-house-user','Mendukung pemantauan murid']].map(([a,b,c])=>`<div class="rounded-xl border bg-slate-50 p-3 text-center"><i class="fa-solid ${b} text-2xl text-sky-600"></i><b class="mt-2 block text-xs">${a}</b><p class="mt-1 text-[10px] text-slate-500">${c}</p></div>`).join('')}</div></section></div>`;
           else if(teacherSettingsTab==='kelas')panel=`<section class="rounded-2xl border border-emerald-100 bg-white p-4"><div class="flex items-start gap-3"><span class="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700"><i class="fa-solid fa-lock"></i></span><div><h3 class="font-black">Kelas Tanggung Jawab Guru</h3><p class="mt-1 max-w-3xl text-xs leading-relaxed text-slate-600">Tetapkan satu kelas untuk akun yang sedang login. Setelah disimpan, seluruh data murid, bukti karya, refleksi, penilaian, dan laporan di akun ini dibatasi ke kelas tersebut. Tidak tersedia pilihan Semua Kelas.</p></div></div><div class="mt-5 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end"><label class="block text-xs font-bold text-slate-700">Kelas yang menjadi tanggung jawab<select id="settings-assigned-class" class="mt-1 w-full rounded-xl border border-emerald-200 bg-white p-3 text-sm"><option value="">Pilih kelas</option>${[['Kelas I','Kelas I'],['Kelas II','Kelas II'],['Kelas III','Kelas III'],['Kelas IV','Kelas IV'],['Kelas V','Kelas V'],['Kelas VI','Kelas VI']].map(([v,l])=>`<option value="${v}" ${normalizeTeacherClassKey(getTeacherAssignedClass())===normalizeTeacherClassKey(v)?'selected':''}>${l}</option>`).join('')}</select></label><button onclick="saveTeacherAssignedClass()" class="rounded-xl bg-emerald-600 px-5 py-3 text-xs font-black text-white hover:bg-emerald-700"><i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Kelas Saya</button></div><div class="mt-4 rounded-xl border border-sky-100 bg-sky-50 p-3 text-xs text-sky-900"><b>Kelas aktif saat ini:</b> ${escapeHTML(getTeacherAssignedClass() || 'Belum ditetapkan')}<p class="mt-1">Jika kelas belum ditetapkan, data murid tidak ditampilkan sampai pengaturan disimpan.</p></div></section>`;
           else if(teacherSettingsTab==='topik')panel=`<section class="rounded-2xl border bg-white p-4"><h3 class="font-black">Topik & Aktivitas</h3><p class="mt-1 text-xs text-slate-500">Pilih topik aktif. Aktivitas Topik 2 ditampilkan sesuai urutan tahapnya.</p><label class="mt-4 block max-w-xl text-xs font-bold">Topik Aktif<select id="settings-topic" class="mt-1 w-full rounded-xl border p-3 text-xs"><option value="Topik 2: Aku Bisa Menjaga Lingkungan" ${(t.selectedTopik||'').includes('Topik 2')?'selected':''}>Topik 2: Aku Bisa Menjaga Lingkungan</option><option value="Topik 1: Kenali Lingkungan Sekolahku">Topik 1: Kenali Lingkungan Sekolahku</option><option value="Topik 3: Aksi Nyata Daur Ulang Mandiri">Topik 3: Aksi Nyata Daur Ulang Mandiri</option></select></label><div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">${teacherPortfolioActivities().map((a,i)=>`<div class="flex items-center gap-3 rounded-xl border p-3"><span class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 font-black text-emerald-700">${i+1}</span><div><b class="block text-xs">${a.title}</b><p class="text-[10px] text-slate-500">${a.short}</p></div><span class="ml-auto rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-bold text-emerald-700">Aktif</span></div>`).join('')}</div></section>`;
           else if(teacherSettingsTab==='instrumen')panel=`<section class="rounded-2xl border bg-white p-4"><h3 class="font-black">Instrumen Asesmen</h3><p class="mt-1 text-xs text-slate-500">Buka instrumen yang relevan dengan kisi-kisi Topik 2.</p><div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">${[['Observasi Guru','fa-clipboard-check','penilaian_observasi'],['Penilaian Diri Murid','fa-user-check','penilaian_diri'],['Penilaian Teman Sebaya','fa-people-arrows-left-right','penilaian_sebaya'],['Rubrik & Rekap APK','fa-chart-column','penilaian_rekap']].map(([a,b,c])=>`<button onclick="setTeacherMenu('${c}')" class="rounded-xl border p-4 text-left hover:border-emerald-400 hover:bg-emerald-50"><i class="fa-solid ${b} text-2xl text-emerald-600"></i><b class="mt-3 block text-xs">${a}</b><span class="mt-2 block text-[10px] font-bold text-sky-700">Buka instrumen →</span></button>`).join('')}</div><p class="mt-4 rounded-xl bg-sky-50 p-3 text-xs">Tahap Berkembang, Cakap, atau Mahir ditetapkan per subdimensi berdasarkan interpretasi keseluruhan bukti dan deskriptor APK, bukan rata-rata skor.</p></section>`;
@@ -4768,12 +4923,31 @@ function renderStudentActivityForm(actId) {
               <div class="flex flex-wrap justify-end gap-3"><button onclick="setTeacherMenu('beranda')" class="rounded-xl border border-slate-200 bg-white px-5 py-3 text-xs font-black text-slate-600">Kembali</button><button onclick="saveRoomLearningEditor()" class="rounded-xl bg-emerald-600 px-5 py-3 text-xs font-black text-white hover:bg-emerald-700"><i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Materi & Video</button></div></div>`;
         }
 
+        function renderTeacherMonitoringChecklist() {
+            const students = teacherAssessmentStudents().filter(s => teacherClassMatches(s.kelas));
+            const activities = [['act1','Aktivitas 1'],['act2','Aktivitas 2'],['act3','Aktivitas 3'],['act4','Aktivitas 4'],['act5','Aktivitas 5']];
+            const cell = (ok, label) => `<span title="${label}" class="inline-flex h-6 min-w-6 items-center justify-center rounded-md px-1 text-xs font-black ${ok?'bg-emerald-100 text-emerald-700':'bg-slate-100 text-slate-400'}">${ok?'✓':'✗'}</span>`;
+            const rows = students.map((student, index) => {
+                const cells = activities.map(([actId, actName]) => {
+                    const sub = teacherActivitySubmission(student, actId) || {};
+                    const answers = sub.answers || sub.data || {};
+                    const evidence = teacherFinalHasValue(teacherFinalEvidenceValue(sub));
+                    const self = teacherFinalHasValue(teacherFinalParse(sub.self_assessment ?? sub.selfAssessment ?? sub.self ?? answers.self_assessment ?? answers[`${actId}_self`]));
+                    const peer = teacherFinalHasValue(teacherFinalParse(sub.peer_assessment ?? sub.peerAssessment ?? sub.peer ?? answers.peer_assessment ?? answers[`${actId}_peer`]));
+                    return `<td class="border border-slate-200 p-3 align-top"><div class="min-w-[125px]"><div class="mb-2 text-[10px] font-black text-slate-600">${actName}</div><div class="grid grid-cols-[1fr_auto] gap-x-2 gap-y-2 text-[10px]"><span>Bukti Belajar</span>${cell(evidence,'Bukti Belajar')}<span>Penilaian Diri</span>${cell(self,'Penilaian Diri')}<span>Penilaian Teman Sebaya</span>${cell(peer,'Penilaian Teman Sebaya')}</div><button onclick="teacherFinalOpenDetail('${String(student.id).replace(/'/g,"\\'")}','${actId}')" class="mt-2 w-full rounded-lg border border-sky-200 bg-sky-50 px-2 py-1.5 text-[10px] font-black text-sky-700">Lihat Detail</button></div></td>`;
+                }).join('');
+                return `<tr class="border-b border-slate-100"><td class="sticky left-0 z-10 min-w-[190px] border border-slate-200 bg-white p-3 align-top"><div class="font-black text-slate-800">${index+1}. ${escapeHTML(student.nama)}</div><div class="mt-1 text-[10px] text-slate-500">${escapeHTML(student.kelas||'')} · ${escapeHTML(student.kelompok||'')}</div><div class="text-[10px] text-slate-400">${escapeHTML(student.nisn||'NISN tidak tersedia')}</div></td>${cells}</tr>`;
+            }).join('');
+            return `<div class="space-y-4 text-slate-800">${teacherPortfolioBanner('PEMANTAUAN PEMBELAJARAN','Daftar Ceklis Pemantauan','Pantau kelengkapan Bukti Belajar, Penilaian Diri, dan Penilaian Teman Sebaya pada Aktivitas 1–5. Ceklis menunjukkan keberadaan data, bukan mutu capaian murid.','fa-list-check',['Pemantauan Aktivitas 1–5','Bukti belajar','Asesmen diri dan teman'])}<section class="rounded-2xl border border-emerald-100 bg-white p-4"><div class="mb-3 flex flex-wrap items-center justify-between gap-3"><div><h2 class="text-lg font-black text-emerald-950">Matriks Ceklis Kelengkapan Murid</h2><p class="mt-1 text-xs text-slate-500">✓ = data terdeteksi · ✗ = data belum terdeteksi.</p></div><div class="flex flex-wrap items-center gap-2"><span class="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-800">${students.length} murid</span><button onclick="setTeacherMenu('penilaian_observasi')" class="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-black text-emerald-700">Buka Penilaian Subdimensi</button></div></div><div class="overflow-x-auto rounded-xl border border-slate-200"><table class="w-full min-w-[1150px] border-collapse text-left text-xs"><thead><tr class="bg-slate-100"><th rowspan="2" class="sticky left-0 z-20 min-w-[200px] border border-slate-200 bg-slate-100 p-3">Nama Murid</th><th colspan="5" class="border border-slate-200 p-2 text-center">AKTIVITAS 1–5</th></tr><tr class="bg-emerald-50">${activities.map(a=>`<th class="border border-slate-200 p-2 text-center">${a[1]}</th>`).join('')}</tr></thead><tbody>${rows || '<tr><td colspan="6" class="p-8 text-center text-slate-500">Belum ada data murid pada kelas tanggung jawab ini.</td></tr>'}</tbody></table></div><div class="mt-3 grid gap-2 text-[11px] text-slate-500 sm:grid-cols-3"><p>✓ Bukti Belajar: file, tautan, atau jawaban terdeteksi.</p><p>✓ Penilaian Diri: respons refleksi penilaian diri terdeteksi.</p><p>✓ Penilaian Teman Sebaya: respons penilaian teman terdeteksi.</p></div></section></div>`;
+        }
+
         function renderTeacherMenuView(menu) {
             if (menu === 'panduan') return renderTeacherPanduanView();
             if (menu === 'ruang_belajar_editor') return renderTeacherRoomLearningEditor();
             if (menu === 'pengaturan') return renderTeacherPengaturanView();
             if (menu === 'laporan') return renderTeacherLaporanView();
-            if (['penilaian_observasi','penilaian_diri','penilaian_sebaya','penilaian_rekap'].includes(menu)) return renderTeacherAssessmentView(menu);
+            if (menu === 'ceklist_pemantauan') return renderTeacherMonitoringChecklist();
+            if (['penilaian_observasi','penilaian_diri','penilaian_sebaya','penilaian_rekap','penilaian_subdimensi'].includes(menu)) return renderTeacherAssessmentView(menu);
             if (menu === 'kelola_kelas') return renderTeacherKelolaKelasView();
             if (menu === 'data_murid') return renderTeacherDataMuridView();
             if (menu === 'pengantar_topik') return renderTeacherPengantarTopikView();
@@ -6207,7 +6381,7 @@ function renderStudentActivityForm(actId) {
 
         // INITIAL RENDER ON LOAD
         window.addEventListener('DOMContentLoaded', () => {
-            render();
+            restorePortalSessionOnLoad();
         });
     
         // Fitur tambahan Notifikasi dan Profil Guru. Notifikasi dapat dipicu oleh modul lain melalui addPortalNotification().
