@@ -2035,6 +2035,18 @@
             if (!result || result.status !== 'success' || !result.url) {
                 throw new Error(result?.message || `Berkas ${kind} gagal diunggah ke Google Drive.`);
             }
+            const urlKey = `${actId}_${kind}_url`;
+            const filenameKey = `${actId}_${kind}_filename`;
+            state.student.answers[urlKey] = result.url;
+            state.student.answers[filenameKey] = result.fileName || file.name;
+            persistStudentDraft();
+            persistActivityDraftLocal(actId);
+            // Backend juga menyimpan URL upload secara langsung; sinkronisasi ini
+            // memastikan seluruh jawaban frontend ikut tercatat pada record aktivitas yang sama.
+            const activitySave = await saveStudentActivityServer(actId, 'draf');
+            if (!activitySave || activitySave.status !== 'success') {
+                throw new Error(activitySave?.message || 'URL berkas terunggah, tetapi belum tersinkron ke record aktivitas.');
+            }
             return result;
         }
 
