@@ -1407,12 +1407,62 @@
         }
 
         // Batas waktu untuk mencegah spinner berjalan tanpa henti saat GAS lambat.
-        const API_TIMEOUT_MS = 60000;
+        const API_TIMEOUT_MS = 8000;
+        const API_SESSION_CACHE_TTL_MS = 5 * 60 * 1000;
         let activeApiRequests = 0;
+
+        // Cache hanya untuk aksi pembacaan; aksi simpan/perubahan tidak pernah di-cache.
+        const API_SESSION_CACHEABLE_ACTIONS = new Set([
+            'getStimulasiContent', 'getRoomLearningContent', 'getPublishedPengantar',
+            'getRestrictionStatus', 'getDashboardStats', 'getTeacherSettings', 'getPengaturan',
+            'getGuideResources', 'getStudentFeedback', 'getStudentAPKProfile', 'getTeacherEvaluation',
+            'getTeacherData', 'getInitialAppData', 'getStudentData', 'getUserStateData', 'fetchInitialData'
+        ]);
+        const API_SESSION_MUTATING_ACTIONS = new Set([
+            'saveStudentSubmission', 'addTeacherStudent', 'addStudent', 'updateTeacherStudent', 'updateStudent',
+            'saveTeacherClass', 'savePengaturan', 'saveTeacherSettings', 'saveStimulasiContent',
+            'saveRoomLearningContent', 'saveRestrictionStatus', 'saveTeacherEvaluation',
+            'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'savePortfolioAssessment',
+            'uploadFileToDrive', 'uploadGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile'
+        ]);
+        function getApiSessionCacheKey(action, payload) {
+            let scope = '';
+            try { scope = (state.teacherAuth && state.teacherAuth.nip) || (state.student && state.student.nisn) || ''; } catch (e) {}
+            return `portalSrlApiCache:${scope}:${action}:${JSON.stringify(payload || {})}`;
+        }
+        function readApiSessionCache(action, payload) {
+            if (!API_SESSION_CACHEABLE_ACTIONS.has(action)) return null;
+            try {
+                const raw = sessionStorage.getItem(getApiSessionCacheKey(action, payload));
+                if (!raw) return null;
+                const entry = JSON.parse(raw);
+                if (!entry || Date.now() - entry.timestamp > API_SESSION_CACHE_TTL_MS) {
+                    sessionStorage.removeItem(getApiSessionCacheKey(action, payload));
+                    return null;
+                }
+                return entry.data || null;
+            } catch (e) { return null; }
+        }
+        function writeApiSessionCache(action, payload, data) {
+            if (!API_SESSION_CACHEABLE_ACTIONS.has(action) || !data || data.status === 'error' || data.success === false) return;
+            try { sessionStorage.setItem(getApiSessionCacheKey(action, payload), JSON.stringify({ timestamp: Date.now(), data })); } catch (e) {}
+        }
+        function invalidateApiSessionCache() {
+            try {
+                const keys = [];
+                for (let i = 0; i < sessionStorage.length; i++) {
+                    const key = sessionStorage.key(i);
+                    if (key && key.startsWith('portalSrlApiCache:')) keys.push(key);
+                }
+                keys.forEach(key => sessionStorage.removeItem(key));
+            } catch (e) {}
+        }
 
         async function apiCall(action, payload = {}) {
             let timeoutId = null;
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const cachedResult = readApiSessionCache(action, payload);
+            if (cachedResult) return cachedResult;
             activeApiRequests++;
             showSpinner();
             try {
@@ -1453,6 +1503,12 @@
                 if (!result || typeof result !== 'object') {
                     throw new Error('Respons server kosong atau formatnya tidak valid.');
                 }
+                if (API_SESSION_CACHEABLE_ACTIONS.has(action)) {
+                    writeApiSessionCache(action, payload, result);
+                }
+                if (API_SESSION_MUTATING_ACTIONS.has(action) && result && result.status !== 'error' && result.success !== false) {
+                    invalidateApiSessionCache();
+                }
                 return result;
             } catch (err) {
                 const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
@@ -1460,7 +1516,10 @@
                     ? `Koneksi ke server terlalu lama (batas ${Math.round(API_TIMEOUT_MS / 1000)} detik). Draft isian tetap tersimpan di perangkat ini. Silakan coba lagi.`
                     : (err && err.message ? err.message : 'Koneksi ke server gagal. Periksa jaringan internet Anda.');
                 console.error(`API Error [${action}]:`, err);
-                return { status: 'error', fallback: true, action, message };
+                if (timedOut) {
+                    try { showModal('Permintaan Terlalu Lama', message, 'error'); } catch (modalError) { console.warn('Pesan timeout tidak dapat ditampilkan:', modalError); }
+                }
+                return { status: 'error', success: false, fallback: true, action, message };
             } finally {
                 if (timeoutId !== null) clearTimeout(timeoutId);
                 activeApiRequests = Math.max(0, activeApiRequests - 1);
