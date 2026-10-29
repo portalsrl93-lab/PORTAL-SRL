@@ -870,7 +870,7 @@
         </div>
     </div>
 
-    <div id="loading-spinner" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[150] hidden flex-col items-center justify-center text-white font-kids">
+    <div id="loading-spinner" aria-hidden="true" class="hidden" style="display:none!important">
         <div class="w-16 h-16 border-4 border-emerald-400 border-t-transparent rounded-full animate-spin mb-3"></div>
         <div class="font-extrabold text-lg text-emerald-200">Menghubungkan ke Portal... 🚀</div>
     </div>
@@ -1089,8 +1089,37 @@
             }
         };
 
-        function showSpinner() { document.getElementById('loading-spinner').classList.remove('hidden'); document.getElementById('loading-spinner').classList.add('flex'); }
-        function hideSpinner() { document.getElementById('loading-spinner').classList.add('hidden'); document.getElementById('loading-spinner').classList.remove('flex'); }
+        // Overlay layar penuh dinonaktifkan untuk menjaga navigasi dan pembacaan data tetap silent.
+        function showSpinner() { /* Sengaja tidak menampilkan overlay full-screen. */ }
+        function hideSpinner() { /* Dipertahankan agar pemanggil lama tetap kompatibel. */ }
+
+        // Indikator proses lokal pada tombol untuk aksi yang mengubah data.
+        function beginButtonLoading(button) {
+            if (!button || button.tagName !== 'BUTTON' || button.dataset.srlLoading === '1') return null;
+            const snapshot = {
+                button,
+                html: button.innerHTML,
+                disabled: button.disabled,
+                ariaBusy: button.getAttribute('aria-busy'),
+                className: button.className
+            };
+            button.dataset.srlLoading = '1';
+            button.disabled = true;
+            button.setAttribute('aria-busy', 'true');
+            button.classList.add('opacity-70', 'cursor-wait');
+            button.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2" aria-hidden="true"></i>Memproses...';
+            return snapshot;
+        }
+        function endButtonLoading(snapshot) {
+            if (!snapshot || !snapshot.button) return;
+            const button = snapshot.button;
+            button.innerHTML = snapshot.html;
+            button.disabled = snapshot.disabled;
+            button.className = snapshot.className;
+            if (snapshot.ariaBusy === null) button.removeAttribute('aria-busy');
+            else button.setAttribute('aria-busy', snapshot.ariaBusy);
+            delete button.dataset.srlLoading;
+        }
 
         function showModal(title, message, type = 'info') {
             const container = document.getElementById('modal-container');
@@ -1423,7 +1452,7 @@
             'saveTeacherClass', 'savePengaturan', 'saveTeacherSettings', 'saveStimulasiContent',
             'saveRoomLearningContent', 'saveRestrictionStatus', 'saveTeacherEvaluation',
             'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'savePortfolioAssessment',
-            'uploadFileToDrive', 'uploadGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile'
+            'uploadFileToDrive', 'uploadGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile', 'saveStudentGroups'
         ]);
         function getApiSessionCacheKey(action, payload) {
             let scope = '';
@@ -1464,7 +1493,9 @@
             const cachedResult = readApiSessionCache(action, payload);
             if (cachedResult) return cachedResult;
             activeApiRequests++;
-            showSpinner();
+            const submitButton = API_SESSION_MUTATING_ACTIONS.has(action)
+                ? beginButtonLoading(document.activeElement)
+                : null;
             try {
                 const protectedTeacherActions = ['getTeacherData', 'getTeacherSchoolProfile', 'saveTeacherSchoolProfile', 'addTeacherStudent', 'updateTeacherStudent', 'saveTeacherClass', 'saveTeacherSettings', 'saveRoomLearningContent', 'saveStimulasiContent', 'saveTeacherEvaluation', 'savePortfolioAssessment', 'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'getGuideResources', 'uploadGuideResource', 'getTeacherNotifications', 'markTeacherNotificationRead'];
                 const requestPayload = { ...payload };
@@ -1523,6 +1554,7 @@
             } finally {
                 if (timeoutId !== null) clearTimeout(timeoutId);
                 activeApiRequests = Math.max(0, activeApiRequests - 1);
+                endButtonLoading(submitButton);
                 if (activeApiRequests === 0) hideSpinner();
             }
         }
@@ -4861,6 +4893,60 @@ function renderStudentActivityForm(actId) {
             const ids = teacherPortalUI.data.selected;
             teacherPortalUI.data.selected = checked ? [...new Set([...ids, Number(id)])] : ids.filter(x=>x!==Number(id));
         }
+        // Pengelolaan Kelompok Belajar: fungsi baru terisolasi dari fitur Data Murid lainnya.
+        function openStudentGroupsModal() {
+            const classStudents = (Array.isArray(state.teacherDataCache.students) ? state.teacherDataCache.students : [])
+                .filter(s => teacherClassMatches(s.kelas))
+                .map((s,i) => ({...s,id:s.id ?? s.studentId ?? s.nisn ?? i+1,nama:s.nama||s.name||`Murid ${i+1}`,nisn:String(s.nisn||s.id_nisn||'').trim(),kelompok:s.kelompok||'Belum Ada Kelompok'}));
+            if (!classStudents.length) {
+                showModal('Data Murid Belum Tersedia','Data murid kelas ini belum berhasil dimuat. Muat ulang data guru, lalu coba kembali.','warning');
+                return;
+            }
+            const options = [...new Set(['Belum Ada Kelompok', ...Array.from({length:10},(_,i)=>`Kelompok ${i+1}`), ...classStudents.map(s=>s.kelompok).filter(Boolean)])];
+            const rows = classStudents.map((s,i)=>`<tr class="border-b border-slate-100"><td class="px-3 py-2 text-xs text-slate-500">${i+1}</td><td class="px-3 py-2"><div class="font-bold text-slate-800 text-sm">${escapeHTML(s.nama)}</div><div class="text-[10px] text-slate-400">${escapeHTML(s.nisn||'ID murid: '+s.id)}</div></td><td class="px-3 py-2"><select data-srl-group-student="${escapeHTML(String(s.nisn||s.id))}" class="w-full min-w-36 rounded-lg border border-slate-300 bg-white p-2 text-xs font-semibold">${options.map(g=>`<option value="${escapeHTML(g)}" ${g===s.kelompok?'selected':''}>${escapeHTML(g)}</option>`).join('')}</select></td></tr>`).join('');
+            const overlay=document.createElement('div');
+            overlay.id='srl-student-groups-modal';
+            overlay.className='fixed inset-0 z-[250] flex items-center justify-center p-3 sm:p-6';
+            overlay.style.background='rgba(15,23,42,.62)';
+            overlay.innerHTML=`<section role="dialog" aria-modal="true" aria-labelledby="srl-groups-title" class="bg-white w-full max-w-3xl max-h-[92vh] overflow-hidden rounded-2xl shadow-2xl flex flex-col"><header class="flex items-start justify-between gap-3 p-5 border-b border-slate-100"><div><h2 id="srl-groups-title" class="text-lg sm:text-xl font-black text-slate-900"><i class="fa-solid fa-people-group text-emerald-600 mr-2"></i>Pengaturan Kelompok Belajar</h2><p class="text-xs text-slate-500 mt-1">Tentukan kelompok setiap murid, lalu simpan perubahan.</p></div><button type="button" onclick="closeStudentGroupsModal()" class="w-9 h-9 rounded-full hover:bg-slate-100 text-slate-500" aria-label="Tutup"><i class="fa-solid fa-xmark"></i></button></header><div class="p-4 border-b border-slate-100 bg-emerald-50/60"><label class="flex items-center gap-2 text-sm font-bold text-slate-800"><input id="srl-groups-random" type="checkbox" class="accent-emerald-600" onchange="document.getElementById('srl-groups-random-count-wrap').classList.toggle('hidden',!this.checked)"> Acak Kelompok Otomatis</label><div id="srl-groups-random-count-wrap" class="hidden mt-3 flex items-center gap-3"><label for="srl-groups-random-count" class="text-xs font-bold text-slate-600">Jumlah kelompok</label><input id="srl-groups-random-count" type="number" min="2" max="10" value="4" class="w-20 rounded-lg border border-slate-300 p-2 text-sm"><span class="text-xs text-slate-500">Murid dibagi secara acak dan merata.</span></div></div><div class="overflow-auto flex-1"><table class="w-full text-left"><thead class="sticky top-0 bg-slate-50 text-xs uppercase text-slate-500"><tr><th class="px-3 py-3">No.</th><th class="px-3 py-3">Nama Murid</th><th class="px-3 py-3">Nama Kelompok</th></tr></thead><tbody>${rows}</tbody></table></div><footer class="flex flex-wrap justify-end gap-2 p-4 border-t border-slate-100"><button type="button" onclick="closeStudentGroupsModal()" class="rounded-xl border border-slate-300 px-4 py-2.5 text-xs font-bold text-slate-600">Batal</button><button id="srl-save-student-groups" type="button" onclick="saveStudentGroupsFromModal()" class="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 text-xs font-black"><i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Kelompok</button></footer></section>`;
+            overlay.dataset.students=JSON.stringify(classStudents.map(s=>({id:String(s.id),nisn:s.nisn,nama:s.nama,kelompok:s.kelompok})));
+            overlay.addEventListener('click',e=>{if(e.target===overlay)closeStudentGroupsModal();});
+            document.body.appendChild(overlay);
+        }
+        function closeStudentGroupsModal() {
+            const modal=document.getElementById('srl-student-groups-modal');
+            if(modal) modal.remove();
+        }
+        async function saveStudentGroupsFromModal() {
+            const modal=document.getElementById('srl-student-groups-modal');
+            if(!modal) return;
+            const button=document.getElementById('srl-save-student-groups');
+            const students=JSON.parse(modal.dataset.students||'[]');
+            let groups=students.map(s=>({studentId:s.id,nisn:s.nisn,kelompokName:modal.querySelector(`[data-srl-group-student="${CSS.escape(String(s.nisn||s.id))}"]`)?.value||'Belum Ada Kelompok'}));
+            const random=document.getElementById('srl-groups-random')?.checked;
+            if(random) {
+                const count=Math.max(2,Math.min(10,Number(document.getElementById('srl-groups-random-count')?.value)||4));
+                for(let i=groups.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[groups[i],groups[j]]=[groups[j],groups[i]];}
+                groups=groups.map((g,i)=>({...g,kelompokName:`Kelompok ${(i%count)+1}`}));
+            }
+            if(button){button.disabled=true;button.innerHTML='<i class="fa-solid fa-spinner fa-spin mr-2"></i>Menyimpan...';}
+            try {
+                const result=await apiCall('saveStudentGroups',{groups});
+                if(!result || result.success!==true) throw new Error(result?.message||'Kelompok belum berhasil disimpan.');
+                const byNisn=new Map(groups.map(g=>[String(g.nisn||''),g.kelompokName]));
+                const byId=new Map(groups.map(g=>[String(g.studentId||''),g.kelompokName]));
+                if(Array.isArray(state.teacherDataCache.students)) state.teacherDataCache.students=state.teacherDataCache.students.map(s=>({...s,kelompok:byNisn.get(String(s.nisn||s.id_nisn||''))??byId.get(String(s.id??s.studentId??''))??s.kelompok??'Belum Ada Kelompok'}));
+                if(Array.isArray(studentMasterDB)) studentMasterDB=studentMasterDB.map(s=>({...s,kelompok:byNisn.get(String(s.nisn||s.id_nisn||''))??byId.get(String(s.id??''))??s.kelompok??'Belum Ada Kelompok'}));
+                closeStudentGroupsModal();
+                renderTeacherBoard();
+                showModal('Kelompok Berhasil Disimpan',result.message||'Kelompok berhasil diperbarui.','success');
+            } catch(err) {
+                console.error('Gagal menyimpan kelompok murid:',err);
+                if(button){button.disabled=false;button.innerHTML='<i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Kelompok';}
+                showModal('Gagal Menyimpan Kelompok',escapeHTML(err.message||'Terjadi kesalahan saat menyimpan kelompok.'),'error');
+            }
+        }
+
         function setTeacherClassTab(tab) {
             teacherPortalUI.kelas.tab = tab;
             renderTeacherBoard();
@@ -5468,7 +5554,7 @@ function renderStudentActivityForm(actId) {
                             <div class="overflow-x-auto"><table class="w-full text-left text-xs"><thead class="bg-emerald-50 text-slate-700"><tr><th class="p-3"><input type="checkbox" class="accent-emerald-600" onchange="document.querySelectorAll('[data-class-row]').forEach(x=>{x.checked=this.checked;toggleTeacherClassSelection(Number(x.value),this.checked)})"></th><th class="p-3">No.</th><th class="p-3">Nama Murid</th><th class="p-3 text-center">L/P</th><th class="p-3">Kelompok</th><th class="p-3">Status</th><th class="p-3">Progres Aktivitas (1–5)</th><th class="p-3">Bukti Karya</th><th class="p-3">Capaian APK</th><th class="p-3 text-center">Aksi</th></tr></thead><tbody>${shown.length?renderRows(shown):''}</tbody></table></div>
                             <div class="px-4 py-3 border-t border-slate-100 flex flex-wrap justify-between items-center gap-3 text-xs text-slate-500"><span>Menampilkan ${sorted.length?((ui.page-1)*10+1):0}–${Math.min(ui.page*10,sorted.length)} dari ${sorted.length} murid</span><div class="flex gap-1">${Array.from({length:pages},(_,i)=>`<button onclick="setTeacherClassPage(${i+1})" class="w-8 h-8 rounded-lg border ${ui.page===i+1?'bg-emerald-600 text-white border-emerald-600':'border-slate-200 hover:bg-slate-50'}">${i+1}</button>`).join('')}</div></div>
                         ` : ui.tab==='Kelompok Belajar' ? `
-                            <div class="p-5"><h3 class="text-lg font-black mb-3">Kelompok Belajar</h3><div class="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">${[...new Set(inClass.map(s=>s.kelompok))].map(g=>{const members=inClass.filter(s=>s.kelompok===g);return `<div class="rounded-2xl border border-slate-200 p-4"><div class="flex items-center justify-between mb-2"><b class="text-slate-800">${escapeHTML(g)}</b><span class="bg-emerald-100 text-emerald-800 rounded-full px-2 py-1 text-xs font-bold">${members.length} murid</span></div><div class="space-y-2">${members.map(s=>`<div class="flex items-center gap-2 text-xs">${teacherPortalAvatar(s,'w-7 h-7')}<span>${escapeHTML(s.nama)}</span></div>`).join('')}</div></div>`}).join('')}</div><p class="text-xs text-slate-500 mt-4">Pengelompokan mengikuti data murid yang tersedia.</p></div>
+                            <div class="p-5"><div class="flex flex-wrap items-center justify-between gap-3 mb-4"><div><h3 class="text-lg font-black">Kelompok Belajar</h3><p class="text-xs text-slate-500 mt-1">Atur dan simpan pembagian kelompok murid kelas ${escapeHTML(kelas)}.</p></div><button type="button" onclick="openStudentGroupsModal()" class="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 text-xs font-black shadow-sm"><i class="fa-solid fa-people-group mr-2"></i>Atur Kelompok</button></div><div class="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">${[...new Set(inClass.map(s=>s.kelompok||'Belum Ada Kelompok'))].map(g=>{const members=inClass.filter(s=>(s.kelompok||'Belum Ada Kelompok')===g);return `<div class="rounded-2xl border border-slate-200 p-4"><div class="flex items-center justify-between mb-2"><b class="text-slate-800">${escapeHTML(g)}</b><span class="bg-emerald-100 text-emerald-800 rounded-full px-2 py-1 text-xs font-bold">${members.length} murid</span></div><div class="space-y-2">${members.map(s=>`<div class="flex items-center gap-2 text-xs">${teacherPortalAvatar(s,'w-7 h-7')}<span>${escapeHTML(s.nama)}</span></div>`).join('')}</div></div>`}).join('')}</div><p class="text-xs text-slate-500 mt-4">Perubahan kelompok tersimpan pada Google Sheets.</p></div>
                         ` : ui.tab==='Monitoring Progres' ? `
                             <div class="p-5"><h3 class="text-lg font-black mb-4">Monitoring Progres Kelas</h3><div class="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">${inClass.map(s=>`<button onclick="selectStudentDetail(${s.id});setTeacherMenu('data_murid')" class="text-left border border-slate-200 rounded-2xl p-4 hover:border-emerald-300"><div class="flex items-center gap-2 mb-3">${teacherPortalAvatar(s,'w-9 h-9')}<span class="font-bold text-sm">${escapeHTML(s.nama)}</span></div><div class="flex items-center gap-2">${teacherPortalProgressBar(s.progres)}<b class="text-xs">${s.progres}%</b></div><div class="text-xs text-slate-500 mt-2">Capaian: ${escapeHTML(s.apk)}</div></button>`).join('')}</div></div>
                         ` : `
