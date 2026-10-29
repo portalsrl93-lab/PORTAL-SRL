@@ -1121,6 +1121,39 @@
             delete button.dataset.srlLoading;
         }
 
+        // Notifikasi sukses login khusus; tidak mengubah alur autentikasi atau notifikasi gagal.
+        function showLoginSuccessToast(displayName, roleLabel) {
+            const oldToast = document.getElementById('srl-login-success-toast');
+            if (oldToast) oldToast.remove();
+
+            const toast = document.createElement('div');
+            toast.id = 'srl-login-success-toast';
+            toast.setAttribute('role', 'status');
+            toast.setAttribute('aria-live', 'polite');
+            toast.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:9999;width:min(92vw,460px);padding:14px 18px;border-radius:16px;background:#047857;color:#fff;box-shadow:0 14px 36px rgba(15,23,42,.22);display:flex;align-items:center;gap:12px;font-family:Inter,sans-serif;animation:popIn .25s ease-out;';
+            const icon = document.createElement('span');
+            icon.innerHTML = '<i class="fa-solid fa-circle-check" aria-hidden="true"></i>';
+            icon.style.cssText = 'font-size:24px;flex:0 0 auto;';
+            const textWrap = document.createElement('div');
+            const title = document.createElement('div');
+            title.textContent = 'Berhasil Login!';
+            title.style.cssText = 'font-weight:900;font-size:15px;line-height:1.35;';
+            const message = document.createElement('div');
+            message.textContent = 'Selamat datang' + (displayName ? ', ' + displayName : '') + (roleLabel ? ' di Portal ' + roleLabel + '.' : ' di PORTAL-SRL.');
+            message.style.cssText = 'font-size:12px;margin-top:2px;opacity:.95;line-height:1.4;';
+            textWrap.append(title, message);
+            toast.append(icon, textWrap);
+            document.body.appendChild(toast);
+            return new Promise(resolve => {
+                window.setTimeout(() => {
+                    toast.style.transition = 'opacity .2s ease, transform .2s ease';
+                    toast.style.opacity = '0';
+                    toast.style.transform = 'translate(-50%, -8px)';
+                    window.setTimeout(() => { toast.remove(); resolve(); }, 220);
+                }, 1450);
+            });
+        }
+
         function showModal(title, message, type = 'info') {
             const container = document.getElementById('modal-container');
             let icon = '<i class="fa-solid fa-face-smile text-emerald-500"></i>';
@@ -1780,6 +1813,8 @@
                 return;
             }
 
+            await showLoginSuccessToast(verifiedStudent.nama, 'Murid');
+
             const userId = verifiedStudent.nisn || `${kelas.replace(/\s+/g,'')}_${verifiedStudent.nama.replace(/\s+/g,'')}`;
 
             state.student.isLoggedIn = true;
@@ -1883,6 +1918,7 @@
             const res = await apiCall('loginGuru', { user_id: username, username: username, password: pass });
 
             if (res && res.status === 'success' && !res.fallback) {
+                await showLoginSuccessToast((res.data && res.data.nama) || res.nama || username, 'Guru');
                 state.teacherAuth = {
                     nip: String((res.data && res.data.user_id) || username),
                     token: String(res.teacherToken || ''),
@@ -1898,10 +1934,12 @@
                 // Pengaturan global tidak boleh mengisi identitas sekolah guru lain.
                 resetTeacherSchoolProfile();
                 const profileResult = await apiCall('getTeacherSchoolProfile');
-                if (!profileResult || profileResult.status !== 'success') {
+                const profileLoadOk = !!profileResult && (profileResult.status === 'success' || profileResult.success === true);
+                if (!profileLoadOk) {
                     showModal('Profil Sekolah Belum Dimuat', profileResult?.message || 'Tidak dapat membaca profil sekolah dari database. Coba login ulang.', 'warning');
                 } else {
-                    applyTeacherSchoolProfile(profileResult.profile || {});
+                    // Mendukung respons backend lama (profile) dan format baru (data).
+                    applyTeacherSchoolProfile(profileResult.profile || profileResult.data || {});
                 }
                 navigateTo('guru_board');
                 startTeacherNotificationPolling();
@@ -4468,11 +4506,13 @@ function renderStudentActivityForm(actId) {
           t.schoolName=val('settings-school-name');t.npsn=val('settings-npsn');t.schoolAddress=val('settings-address');t.principal=val('settings-principal');t.principalNip=val('settings-principal-nip').trim();t.schoolYear=val('settings-year');t.schoolDescription=val('settings-description');t.teacherDisplayName=val('settings-teacher-name').trim();t.teacherUsername=val('settings-username').trim()||String(state.teacherAuth?.nip||'').trim();t.teacherClass=getTeacherAssignedClass();t.selectedTopik=val('settings-topic')||t.selectedTopik;if(document.getElementById('settings-header-image'))t.headerImage=val('settings-header-image');t.logoUrl=val('settings-logo-url')||t.logoUrl||'';const color=document.querySelector('input[name="settings-theme"]:checked');if(color)t.themeColor=color.value;
           const profile = Object.fromEntries(TEACHER_SCHOOL_KEYS.map(k=>[k,t[k]||'']));
           const profileSaved = await apiCall('saveTeacherSchoolProfile',{profile});
-          if(!profileSaved || profileSaved.status!=='success'){
+          const profileSaveOk = !!profileSaved && (profileSaved.status === 'success' || profileSaved.success === true);
+          if(!profileSaveOk){
             showModal('Gagal Menyimpan Profil Sekolah',profileSaved?.message||'Penyimpanan ke database gagal.','error');
             return;
           }
-          applyTeacherSchoolProfile(profileSaved.profile || profile);
+          // Backend baru mengembalikan data; backend lama mungkin mengembalikan profile.
+          applyTeacherSchoolProfile(profileSaved.profile || profileSaved.data || profile);
           savePortalProfile({name:t.teacherDisplayName||'',role:t.teacherClass||state.teacherAuth?.kelas||'',school:t.schoolName||'',email:'',avatar:''});
           renderTeacherBoard();
           apiCall('saveTeacherSettings',{teacherSettings:Object.fromEntries(Object.entries(t).filter(([k])=>!TEACHER_SCHOOL_KEYS.includes(k)))}).then(res=>{
