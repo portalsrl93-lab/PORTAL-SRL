@@ -1639,6 +1639,98 @@
         }
 
         const STUDENT_DRAFT_PREFIX = 'portalSrlStudentDraftV1:';
+        const studentActivityServerLoads = new Set();
+        const studentActivitySaveTimers = {};
+        function activityDraftKey(actId, userId = state.student?.nisn) {
+            return `draft_srl_akt_${String(actId || '').replace('act','')}_${String(userId || '').trim()}`;
+        }
+        function getActivityAnswers(actId) {
+            const all = state.student?.answers || {};
+            return Object.fromEntries(Object.entries(all).filter(([key]) => key.startsWith(`${actId}_`)));
+        }
+        function persistActivityDraftLocal(actId) {
+            try {
+                if (!state.student?.nisn || !/^act[1-5]$/.test(actId)) return;
+                const draft = { idMurid: String(state.student.nisn), noAktivitas: actId, answers: getActivityAnswers(actId), savedAt: new Date().toISOString() };
+                localStorage.setItem(activityDraftKey(actId), JSON.stringify(draft));
+            } catch (err) { console.warn('Draf aktivitas tidak dapat disimpan:', err); }
+        }
+        function readActivityDraftLocal(actId, userId = state.student?.nisn) {
+            try {
+                const raw = localStorage.getItem(activityDraftKey(actId, userId));
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                return parsed && String(parsed.idMurid) === String(userId) ? parsed : null;
+            } catch (err) { return null; }
+        }
+        function clearActivityDraftLocal(actId, userId = state.student?.nisn) {
+            try { localStorage.removeItem(activityDraftKey(actId, userId)); } catch (err) { console.warn(err); }
+        }
+        function makeStudentActivityPayload(actId, statusAksi = 'draf') {
+            const answers = getActivityAnswers(actId);
+            const prompts = Object.fromEntries(Object.entries(answers).filter(([key]) => /_jawaban_\d+$|_pemantik_/.test(key)));
+            const reflections = Object.fromEntries(Object.entries(answers).filter(([key]) => !(/_jawaban_\d+$|_pemantik_/.test(key))));
+            return {
+                idMurid: String(state.student?.nisn || ''), nama: state.student?.name || '', kelas: state.student?.kelas || '',
+                kelompok: state.student?.kelompok || state.student?.group || '', noAktivitas: actId,
+                jawabanPemantik: prompts, refleksiDiri: reflections,
+                urlLkpd: String(answers[`${actId}_lkpd_url`] || ''),
+                urlDokumentasi: String(answers[`${actId}_photo_url`] || ''), statusAksi
+            };
+        }
+        async function saveStudentActivityServer(actId, statusAksi = 'draf') {
+            const payload = makeStudentActivityPayload(actId, statusAksi);
+            if (!payload.idMurid) return { status: 'error', message: 'ID Murid tidak tersedia.' };
+            persistActivityDraftLocal(actId);
+            const result = await apiCall('saveStudentActivity', payload);
+            if (!result || result.status !== 'success' || result.success === false) throw new Error(result?.message || 'Server belum mengonfirmasi penyimpanan aktivitas.');
+            return result;
+        }
+        function scheduleStudentActivityAutosave(actId) {
+            if (!/^act[1-5]$/.test(actId) || !state.student?.nisn) return;
+            persistActivityDraftLocal(actId);
+            clearTimeout(studentActivitySaveTimers[actId]);
+            studentActivitySaveTimers[actId] = setTimeout(async () => {
+                try {
+                    await saveStudentActivityServer(actId, 'draf');
+                    setStudentDraftIndicator(actId, '✓ Draf tersimpan di perangkat dan tersinkron ke server', 'saved');
+                } catch (err) {
+                    // Local draft tetap menjadi salinan pemulihan ketika jaringan/server gagal.
+                    setStudentDraftIndicator(actId, '✓ Draf tersimpan di perangkat; sinkronisasi server akan dicoba lagi saat ada perubahan', 'error');
+                    console.warn('Autosave server aktivitas gagal:', err);
+                }
+            }, 1400);
+        }
+        async function loadStudentActivityFromServer(actId) {
+            const id = String(state.student?.nisn || '').trim();
+            const loadKey = `${id}:${actId}`;
+            if (!id || studentActivityServerLoads.has(loadKey)) return;
+            studentActivityServerLoads.add(loadKey);
+            try {
+                const result = await apiCall('getStudentActivityData', { idMurid: id, noAktivitas: actId });
+                if (!result || result.status !== 'success') throw new Error(result?.message || 'Data aktivitas dari server gagal dimuat.');
+                const serverData = result.data || null;
+                // Baca draf setelah respons server diterima agar ketikan yang dibuat saat fetch berlangsung ikut dipertahankan.
+                const localDraft = readActivityDraftLocal(actId, id);
+                if (serverData) {
+                    const promptData = serverData.jawabanPemantik && typeof serverData.jawabanPemantik === 'object' ? serverData.jawabanPemantik : {};
+                    const reflectionData = serverData.refleksiDiri && typeof serverData.refleksiDiri === 'object' ? serverData.refleksiDiri : {};
+                    Object.assign(state.student.answers, promptData, reflectionData);
+                    if (serverData.urlLkpd) state.student.answers[`${actId}_lkpd_url`] = serverData.urlLkpd;
+                    if (serverData.urlDokumentasi) state.student.answers[`${actId}_photo_url`] = serverData.urlDokumentasi;
+                    state.student.progress[actId] = String(serverData.statusAksi || '').toLowerCase() === 'selesai';
+                }
+                // Draf lokal selalu di-merge terakhir agar ketikan paling baru tidak tertimpa server.
+                if (localDraft?.answers) Object.assign(state.student.answers, localDraft.answers);
+                if (state.student.currentSection === actId) renderStudentBoard();
+            } catch (err) {
+                studentActivityServerLoads.delete(loadKey);
+                console.warn('Pemulihan aktivitas dari server gagal; draf lokal tetap tersedia:', err);
+                const localDraft = readActivityDraftLocal(actId, id);
+                if (localDraft?.answers) Object.assign(state.student.answers, localDraft.answers);
+                if (state.student.currentSection === actId) renderStudentBoard();
+            }
+        }
         function studentDraftStorageKey(userId = state.student.nisn) {
             const id = String(userId || 'anonymous').trim();
             return STUDENT_DRAFT_PREFIX + encodeURIComponent(id);
@@ -1725,11 +1817,13 @@
                 // Handler oninput/onchange yang sudah ada memperbarui state terlebih dahulu.
                 persistStudentDraft();
                 if (/^act[1-5]$/.test(actId)) {
+                    persistActivityDraftLocal(actId);
+                    if (target.type !== 'file') scheduleStudentActivityAutosave(actId);
                     setStudentDraftIndicator(actId, '✓ Draf otomatis tersimpan di perangkat ini', 'saved');
                 }
             };
-            document.addEventListener('input', persistActivityFormDraft, true);
-            document.addEventListener('change', persistActivityFormDraft, true);
+            document.addEventListener('input', persistActivityFormDraft);
+            document.addEventListener('change', persistActivityFormDraft);
         }
         function updateStudentAnswerLocally(key, value) {
             state.student.answers[key] = value;
@@ -1748,6 +1842,10 @@
             // Simpan langsung setiap ada perubahan agar isian tidak hilang saat refresh/penutupan browser.
             persistStudentDraft();
             const actKey = String(key || '').split('_')[0];
+            if (/^act[1-5]$/.test(actKey)) {
+                persistActivityDraftLocal(actKey);
+                scheduleStudentActivityAutosave(actKey);
+            }
             if (['act1','act2','act3','act4','act5'].includes(actKey)) {
                 setStudentDraftIndicator(actKey, '✓ Draf otomatis tersimpan di perangkat ini', 'saved');
             }
@@ -1770,7 +1868,7 @@
             'saveTeacherClass', 'savePengaturan', 'saveTeacherSettings', 'saveStimulasiContent',
             'saveRoomLearningContent', 'saveStimulasiData', 'saveRuangBelajarData', 'saveRestrictionStatus', 'saveTeacherEvaluation',
             'saveTeacherActivityAssessment', 'saveTeacherFinalCapaian', 'saveTeacherFeedback', 'savePortfolioAssessment',
-            'uploadFileToDrive', 'uploadStudentFile', 'uploadGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile', 'saveStudentGroups'
+            'uploadFileToDrive', 'uploadStudentFile', 'saveStudentActivity', 'uploadGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile', 'saveStudentGroups'
         ]);
         function getApiSessionCacheKey(action, payload) {
             let scope = '';
@@ -1940,6 +2038,31 @@
             return result;
         }
 
+        async function saveStudentActivityDraft(actId) {
+            try {
+                persistActivityDraftLocal(actId);
+                await saveStudentActivityServer(actId, 'draf');
+                setStudentDraftIndicator(actId, '✓ Draf tersimpan ke Google Sheets dan perangkat ini', 'saved');
+                showModal('Draf Tersimpan', 'Jawaban dan tautan bukti aktivitas telah disimpan sebagai draf.', 'success');
+            } catch (err) {
+                setStudentDraftIndicator(actId, '⚠ Draf ada di perangkat; server belum mengonfirmasi penyimpanan', 'error');
+                showModal('Draf Belum Tersinkron', escapeHTML(err.message || 'Coba lagi saat koneksi tersedia.'), 'error');
+            }
+        }
+        async function sendStudentActivityAnswers(actId) {
+            try {
+                const submittedAnswers = JSON.parse(JSON.stringify(state.student.answers || {}));
+                await saveStudentActivityServer(actId, 'draf');
+                clearActivityDraftLocal(actId, state.student.nisn);
+                clearStudentDraftIfUnchanged(state.student.nisn, submittedAnswers, actId);
+                setStudentDraftIndicator(actId, '✓ Jawaban berhasil dikirim dan tersimpan di server', 'saved');
+                showModal('Jawaban Terkirim', 'Jawabanmu sudah tersimpan ke Google Sheets. Untuk menandai aktivitas selesai, tekan tombol Selesaikan Aktivitas.', 'success');
+            } catch (err) {
+                setStudentDraftIndicator(actId, '⚠ Jawaban belum terkonfirmasi server; draf lokal tetap aman', 'error');
+                showModal('Pengiriman Gagal', escapeHTML(err.message || 'Jawaban belum berhasil disimpan.'), 'error');
+            }
+        }
+
         async function submitStudentActivity(actId) {
             const answers = state.student.answers || {};
             let missingFields = [];
@@ -2009,7 +2132,19 @@
                 showModal('Belum Tersimpan ⚠️', escapeHTML(saveResult?.message || 'Data belum berhasil dikirim ke server. Draft tetap tersimpan di perangkat ini.'), 'error');
                 return;
             }
+            try {
+                Object.assign(state.student.answers, submittedAnswers);
+                const activityRecordResult = await saveStudentActivityServer(actId, 'selesai');
+                if (!activityRecordResult || activityRecordResult.status !== 'success') throw new Error(activityRecordResult?.message || 'Record Jawaban Murid belum tersimpan.');
+            } catch (recordError) {
+                state.student.progress[actId] = false;
+                persistStudentDraft();
+                setStudentDraftIndicator(actId, '⚠ Data utama tersimpan, tetapi record Jawaban Murid belum terkonfirmasi. Draf dipertahankan.', 'error');
+                showModal('Penyimpanan Belum Lengkap', escapeHTML(recordError.message || 'Data aktivitas belum lengkap tersimpan.'), 'error');
+                return;
+            }
             const activityDraftCleared = clearStudentDraftIfUnchanged(state.student.nisn, submittedAnswers, actId);
+            clearActivityDraftLocal(actId, state.student.nisn);
             delete studentSelectedFiles[`${actId}_lkpd`];
             delete studentSelectedFiles[`${actId}_photo`];
 
@@ -2984,6 +3119,7 @@
                 </div>
             `;
             if (sec === 'pencapaianku') renderStudentAPKChart();
+            if (/^act[1-5]$/.test(sec)) loadStudentActivityFromServer(sec);
         }
 
         function renderNavBtnDesktop(id, label, icon) {
@@ -3371,9 +3507,9 @@
             const file = input && input.files && input.files[0];
             if (!file) return;
             const isPhoto = input.dataset.kind === 'photo';
-            const allowed = isPhoto ? file.type.startsWith('image/') : (file.type.startsWith('image/') || file.type === 'application/pdf' || /\.pdf$/i.test(file.name));
+            const allowed = isPhoto ? (file.type.startsWith('image/') || /\.(jpg|jpeg|png|webp)$/i.test(file.name)) : (file.type.startsWith('image/') || ['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(file.type) || /\.(pdf|doc|docx|jpg|jpeg|png|webp)$/i.test(file.name));
             if (!allowed) {
-                showModal('Format File Belum Sesuai', isPhoto ? 'Pilih berkas foto/gambar untuk dokumentasi kegiatan.' : 'Pilih gambar atau dokumen PDF untuk bukti LKPD.', 'warning');
+                showModal('Format File Belum Sesuai', isPhoto ? 'Pilih berkas foto/gambar untuk dokumentasi kegiatan.' : 'Pilih PDF, DOC, DOCX, JPG, atau PNG untuk bukti LKPD.', 'warning');
                 input.value = '';
                 return;
             }
@@ -3390,7 +3526,25 @@
             updateStudentAnswerLocally(key, file.name);
             const label = document.getElementById(labelId);
             if (label) label.textContent = file.name;
-            showModal('File Siap Diunggah', 'File dipilih. Klik tombol simpan/selesaikan aktivitas agar berkas asli diunggah ke Google Drive dan tautannya tersimpan di Google Sheets.', 'info');
+            // Unggah segera setelah pemilihan; URL Drive langsung dipersistensikan pada record aktivitas.
+            (async () => {
+                try {
+                    setStudentDraftIndicator(actId, `⏳ Mengunggah ${kind === 'lkpd' ? 'LKPD' : 'foto dokumentasi'} ke Google Drive…`, 'uploading');
+                    const uploaded = await uploadStudentEvidence(actId, kind, file);
+                    state.student.answers[`${actId}_${kind}_url`] = uploaded.fileUrl || uploaded.url;
+                    state.student.answers[`${actId}_${kind}_filename`] = uploaded.fileName || file.name;
+                    delete studentSelectedFiles[`${actId}_${kind}`];
+                    persistStudentDraft();
+                    persistActivityDraftLocal(actId);
+                    await saveStudentActivityServer(actId, 'draf');
+                    setStudentDraftIndicator(actId, `✓ ${kind === 'lkpd' ? 'LKPD' : 'Foto dokumentasi'} tersimpan di Drive dan tautannya dicatat di Sheets`, 'saved');
+                    const preview = document.getElementById(`${actId}-${kind}-preview`);
+                    if (preview) preview.innerHTML = `<a href="${escapeHTML(uploaded.fileUrl || uploaded.url)}" target="_blank" rel="noopener" class="text-sm font-bold text-blue-700 underline">Lihat berkas yang diunggah</a>`;
+                } catch (err) {
+                    setStudentDraftIndicator(actId, '⚠ Upload belum berhasil. Draf jawaban tetap tersimpan lokal.', 'error');
+                    showModal('Unggah Belum Berhasil', escapeHTML(err.message || 'Berkas belum berhasil diunggah.'), 'error');
+                }
+            })();
         }
 
         // Instrumen murid mengikuti kisi-kisi Telaah Materi Topik 2:
@@ -3617,6 +3771,10 @@ function renderStudentActivityForm(actId) {
             const answers = state.student.answers || {};
             const fileName = answers[`${actId}_lkpd_filename`] || '';
             const photoName = answers[`${actId}_photo_filename`] || '';
+            const lkpdUrl = answers[`${actId}_lkpd_url`] || '';
+            const photoUrl = answers[`${actId}_photo_url`] || '';
+            const lkpdPreview = lkpdUrl ? `<a href="${escapeHTML(lkpdUrl)}" target="_blank" rel="noopener" class="text-xs font-bold text-blue-700 underline">Lihat LKPD tersimpan</a>` : '';
+            const photoPreview = photoUrl ? `<a href="${escapeHTML(photoUrl)}" target="_blank" rel="noopener" class="text-xs font-bold text-emerald-700 underline">Lihat foto dokumentasi tersimpan</a>` : '';
             const fileId = `${actId}-lkpd-file`;
             const photoId = `${actId}-photo-file`;
             const theme = {blue:['#eaf4ff','#dbeafe','#2563eb'],amber:['#fff8e5','#fde7a7','#d97706'],violet:['#f5edff','#eadcff','#7c3aed'],orange:['#fff2e8','#fed7aa','#ea580c'],teal:['#e6fffb','#99f6e4','#0f766e']}[cfg.color];
@@ -3636,11 +3794,11 @@ function renderStudentActivityForm(actId) {
                       <div class="mt-4 space-y-4">
                         <div class="rounded-xl border border-amber-100 bg-amber-50 p-4">
                           <label for="act1-pemantik-jawaban-1" class="block text-sm font-bold text-slate-800">1. Dari mana asal sampah yang ada di sekitar kita?</label>
-                          <textarea id="act1-pemantik-jawaban-1" name="act1_pemantik_jawaban_1" rows="3" class="mt-2 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm" placeholder="Tuliskan jawabanmu di sini..."></textarea>
+                          <textarea id="act1-pemantik-jawaban-1" name="act1_pemantik_jawaban_1" oninput="updateStudentAnswerLocally('act1_jawaban_1',this.value)" rows="3" class="mt-2 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm" placeholder="Tuliskan jawabanmu di sini...">${escapeHTML((state.student.answers || {}).act1_jawaban_1 || '')}</textarea>
                         </div>
                         <div class="rounded-xl border border-amber-100 bg-amber-50 p-4">
                           <label for="act1-pemantik-jawaban-2" class="block text-sm font-bold text-slate-800">2. Apakah semua sampah dapat dibuang di tempat yang sama? Mengapa?</label>
-                          <textarea id="act1-pemantik-jawaban-2" name="act1_pemantik_jawaban_2" rows="3" class="mt-2 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm" placeholder="Tuliskan jawabanmu di sini..."></textarea>
+                          <textarea id="act1-pemantik-jawaban-2" name="act1_pemantik_jawaban_2" oninput="updateStudentAnswerLocally('act1_jawaban_2',this.value)" rows="3" class="mt-2 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm" placeholder="Tuliskan jawabanmu di sini...">${escapeHTML((state.student.answers || {}).act1_jawaban_2 || '')}</textarea>
                         </div>
                       </div>
                     </section>
@@ -3650,8 +3808,8 @@ function renderStudentActivityForm(actId) {
                       <p>Setelah menjawab pertanyaan pemantik, unggah hasil LKPD dan foto dokumentasi kegiatanmu. Kemudian, isi penilaian diri, penilaian teman, dan refleksi singkat di bagian bawah.</p>
                     </section>
                     <section id="act1-bukti" class="space-y-3">
-                      <section class="activity-step-card" style="background:linear-gradient(110deg,#eaf4ff,#ffffff);border-color:#bfdbfe"><div class="flex h-12 w-12 items-center justify-center rounded-full bg-blue-600 text-xl font-black text-white">1</div><div class="flex h-14 w-14 items-center justify-center text-4xl text-blue-600"><i class="fa-solid fa-file-pen"></i></div><div class="min-w-0 w-full space-y-2"><h3 class="text-lg font-black text-slate-950">Unggah Hasil LKPD</h3><p class="text-sm text-slate-700">Pilih foto atau PDF hasil pekerjaan LKPD-mu.</p><div class="flex flex-col gap-3 rounded-xl border border-dashed border-blue-300 bg-white p-3 sm:flex-row sm:items-center"><div class="min-w-0 flex-1"><p id="${actId}-lkpd-file-name" class="break-words text-xs text-slate-500">${escapeHTML(fileName || 'Belum ada file dipilih')}</p><p class="mt-1 text-xs text-slate-500">Format: gambar atau PDF</p></div><label for="${fileId}" class="cursor-pointer rounded-xl border-2 border-blue-500 px-5 py-3 text-center font-black text-blue-700">Pilih File</label><input id="${fileId}" type="file" accept="image/*,.pdf,application/pdf" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div></div></section>
-                      <section class="activity-step-card" style="background:linear-gradient(110deg,#ecfdf5,#ffffff);border-color:#a7f3d0"><div class="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-600 text-xl font-black text-white">2</div><div class="flex h-14 w-14 items-center justify-center text-4xl text-emerald-600"><i class="fa-solid fa-camera"></i></div><div class="min-w-0 w-full space-y-2"><h3 class="text-lg font-black text-slate-950">Foto Dokumentasi Kegiatan</h3><p class="text-sm text-slate-700">Unggah foto saat kamu mengamati atau mengelompokkan sampah.</p><div class="flex flex-col gap-3 rounded-xl border border-dashed border-emerald-300 bg-white p-3 sm:flex-row sm:items-center"><div class="min-w-0 flex-1"><p id="${actId}-photo-file-name" class="break-words text-xs text-slate-500">${escapeHTML(photoName || 'Belum ada foto dipilih')}</p><p class="mt-1 text-xs text-slate-500">Format: foto/gambar</p></div><label for="${photoId}" class="cursor-pointer rounded-xl border-2 border-emerald-500 px-5 py-3 text-center font-black text-emerald-700">Pilih Foto</label><input id="${photoId}" data-kind="photo" type="file" accept="image/*" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div></div></section>
+                      <section class="activity-step-card" style="background:linear-gradient(110deg,#eaf4ff,#ffffff);border-color:#bfdbfe"><div class="flex h-12 w-12 items-center justify-center rounded-full bg-blue-600 text-xl font-black text-white">1</div><div class="flex h-14 w-14 items-center justify-center text-4xl text-blue-600"><i class="fa-solid fa-file-pen"></i></div><div class="min-w-0 w-full space-y-2"><h3 class="text-lg font-black text-slate-950">Unggah Hasil LKPD</h3><p class="text-sm text-slate-700">Pilih foto atau PDF hasil pekerjaan LKPD-mu.</p><div class="flex flex-col gap-3 rounded-xl border border-dashed border-blue-300 bg-white p-3 sm:flex-row sm:items-center"><div class="min-w-0 flex-1"><p id="${actId}-lkpd-file-name" class="break-words text-xs text-slate-500">${escapeHTML(fileName || 'Belum ada file dipilih')}</p><div id="${actId}-lkpd-preview" class="mt-1 text-xs">${lkpdPreview}</div><p class="mt-1 text-xs text-slate-500">Format: PDF, DOC, DOCX, JPG, atau PNG</p></div><label for="${fileId}" class="cursor-pointer rounded-xl border-2 border-blue-500 px-5 py-3 text-center font-black text-blue-700">Pilih File</label><input id="${fileId}" type="file" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div></div></section>
+                      <section class="activity-step-card" style="background:linear-gradient(110deg,#ecfdf5,#ffffff);border-color:#a7f3d0"><div class="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-600 text-xl font-black text-white">2</div><div class="flex h-14 w-14 items-center justify-center text-4xl text-emerald-600"><i class="fa-solid fa-camera"></i></div><div class="min-w-0 w-full space-y-2"><h3 class="text-lg font-black text-slate-950">Foto Dokumentasi Kegiatan</h3><p class="text-sm text-slate-700">Unggah foto saat kamu mengamati atau mengelompokkan sampah.</p><div class="flex flex-col gap-3 rounded-xl border border-dashed border-emerald-300 bg-white p-3 sm:flex-row sm:items-center"><div class="min-w-0 flex-1"><p id="${actId}-photo-file-name" class="break-words text-xs text-slate-500">${escapeHTML(photoName || 'Belum ada foto dipilih')}</p><div id="${actId}-photo-preview" class="mt-1 text-xs">${photoPreview}</div><p class="mt-1 text-xs text-slate-500">Format: foto/gambar</p></div><label for="${photoId}" class="cursor-pointer rounded-xl border-2 border-emerald-500 px-5 py-3 text-center font-black text-emerald-700">Pilih Foto</label><input id="${photoId}" data-kind="photo" type="file" accept="image/*" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div></div></section>
                     </section>
                     ${cfg.self.length ? `<section id="act1-self" class="scroll-mt-4 rounded-2xl border border-sky-100 bg-white p-4 shadow-sm"><h3 class="mb-3 text-lg font-black text-blue-950"><i class="fa-solid fa-user-check mr-2"></i>Penilaian Diri</h3>${renderStudentAPKAssessment(actId,'self',cfg.self)}</section>` : ''}
                     ${cfg.peer.length ? `<section id="act1-peer" class="scroll-mt-4 rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm"><h3 class="mb-3 text-lg font-black text-indigo-950"><i class="fa-solid fa-users mr-2"></i>Penilaian Teman Sebaya</h3>${renderStudentAPKAssessment(actId,'peer',cfg.peer)}</section>` : ''}
@@ -3675,13 +3833,13 @@ function renderStudentActivityForm(actId) {
                         <div class="flex h-12 w-12 items-center justify-center rounded-full" style="background:${theme[2]};color:white;font-size:1.5rem;font-weight:900">1</div>
                         <div class="flex h-14 w-14 items-center justify-center text-5xl" style="color:${theme[2]}"><i class="fa-solid fa-file-pen"></i></div>
                         <div class="min-w-0 space-y-3 w-full"><div><h3 class="text-xl font-black text-slate-950">Unggah Hasil LKPD</h3><p class="mt-1 text-sm text-slate-700">Kerjakan LKPD dari guru, kemudian pilih foto atau PDF hasil pekerjaanmu.</p></div>
-                            <div class="rounded-xl border border-dashed p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center gap-3" style="border-color:${theme[2]};background:#ffffffd9"><span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-2xl" style="color:${theme[2]}"><i class="fa-solid fa-file-arrow-up"></i></span><div class="flex-1 min-w-0"><h4 class="font-black">Berkas hasil LKPD</h4><p class="text-sm text-slate-600">Format: gambar atau PDF</p><p id="${actId}-lkpd-file-name" class="mt-1 text-xs text-slate-500 break-words">${escapeHTML(fileName || 'Belum ada file dipilih')}</p></div><label for="${fileId}" class="cursor-pointer text-center rounded-xl border-2 px-5 py-3 font-black hover:bg-slate-50" style="border-color:${theme[2]};color:${theme[2]}">Pilih File</label><input id="${fileId}" type="file" accept="image/*,.pdf,application/pdf" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div>
+                            <div class="rounded-xl border border-dashed p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center gap-3" style="border-color:${theme[2]};background:#ffffffd9"><span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-2xl" style="color:${theme[2]}"><i class="fa-solid fa-file-arrow-up"></i></span><div class="flex-1 min-w-0"><h4 class="font-black">Berkas hasil LKPD</h4><p class="text-sm text-slate-600">Format: PDF, DOC, DOCX, JPG, atau PNG</p><p id="${actId}-lkpd-file-name" class="mt-1 text-xs text-slate-500 break-words">${escapeHTML(fileName || 'Belum ada file dipilih')}</p><div id="${actId}-lkpd-preview" class="mt-1 text-xs">${lkpdPreview}</div></div><label for="${fileId}" class="cursor-pointer text-center rounded-xl border-2 px-5 py-3 font-black hover:bg-slate-50" style="border-color:${theme[2]};color:${theme[2]}">Pilih File</label><input id="${fileId}" type="file" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div>
                         </div>
                     </section>
                     <section class="activity-step-card" style="background:linear-gradient(110deg,#ecfdf5,#ffffff);border-color:#a7f3d0">
                         <div class="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-600 text-white text-xl font-black">2</div><div class="flex h-14 w-14 items-center justify-center text-5xl text-emerald-600"><i class="fa-solid fa-camera"></i></div>
                         <div class="min-w-0 space-y-3 w-full"><div><h3 class="text-xl font-black text-slate-950">Foto Dokumentasi Kegiatan</h3><p class="mt-1 text-sm text-slate-700">Pilih foto yang menunjukkan proses atau hasil kegiatanmu. Dokumentasi foto diperlukan pada Aktivitas 1–5.</p></div>
-                        <div class="rounded-xl border border-dashed border-emerald-300 bg-white p-3 flex flex-col sm:flex-row sm:items-center gap-3"><div class="flex-1 min-w-0"><p id="${actId}-photo-file-name" class="text-xs text-slate-500 break-words">${escapeHTML(photoName || 'Belum ada foto dipilih')}</p><p class="mt-1 text-xs text-slate-500">Format: foto/gambar</p></div><label for="${photoId}" class="cursor-pointer text-center rounded-xl border-2 border-emerald-500 px-5 py-3 font-black text-emerald-700">Pilih Foto</label><input id="${photoId}" data-kind="photo" type="file" accept="image/*" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div></div>
+                        <div class="rounded-xl border border-dashed border-emerald-300 bg-white p-3 flex flex-col sm:flex-row sm:items-center gap-3"><div class="flex-1 min-w-0"><p id="${actId}-photo-file-name" class="text-xs text-slate-500 break-words">${escapeHTML(photoName || 'Belum ada foto dipilih')}</p><div id="${actId}-photo-preview" class="mt-1 text-xs">${photoPreview}</div><p class="mt-1 text-xs text-slate-500">Format: foto/gambar</p></div><label for="${photoId}" class="cursor-pointer text-center rounded-xl border-2 border-emerald-500 px-5 py-3 font-black text-emerald-700">Pilih Foto</label><input id="${photoId}" data-kind="photo" type="file" accept="image/*" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div></div>
                     </section>
                     ${actId === 'act4' ? `<section class="activity-step-card" style="background:linear-gradient(110deg,#fff7ed,#ffffff);border-color:#fed7aa"><div class="flex h-12 w-12 items-center justify-center rounded-full bg-orange-600 text-white text-xl font-black">3</div><div class="flex h-14 w-14 items-center justify-center text-5xl text-orange-600"><i class="fa-solid fa-video"></i></div><div class="min-w-0 space-y-2 w-full"><h3 class="text-xl font-black text-slate-950">Tautan Presentasi/Video</h3><p class="text-sm text-slate-700">Tempel tautan presentasi atau video hasil kegiatan kelompok.</p><input type="url" value="${escapeHTML(answers[`${actId}_video_url`] || '')}" oninput="updateStudentAnswerLocally('${actId}_video_url',this.value)" class="w-full rounded-xl border border-orange-200 bg-white p-3 text-sm" placeholder="https://..."></div></section>` : ''}
                     ${cfg.peer.length ? renderStudentAPKAssessment(actId,'peer',cfg.peer) : ''}
@@ -3972,7 +4130,17 @@ function renderStudentActivityForm(actId) {
                 </div>
               </section>`;
 
-            return `<div class="space-y-4 student-activity-draft-scope" data-activity-id="${actId}">${hero}<div id="student-draft-status-${actId}" class="student-draft-status text-xs font-semibold rounded-lg px-3 py-2 mb-2 bg-emerald-50 text-emerald-700 border border-emerald-100" role="status">✓ Draf otomatis tersimpan di perangkat ini</div>${remainingForm}</div>`;
+            // Gunakan panel tujuan dan pertanyaan yang dibangun dari konfigurasi untuk semua Aktivitas 1–5.
+            // Form Aktivitas 1 versi lama memiliki panel pemantik sendiri; hapus agar tidak tampil ganda.
+            if (actId === 'act1') {
+                const oldPromptStart = remainingForm.indexOf('<section id="act1-pemantik"');
+                if (oldPromptStart >= 0) {
+                    const oldPromptEnd = remainingForm.indexOf('</section>', oldPromptStart);
+                    if (oldPromptEnd >= 0) remainingForm = remainingForm.slice(0, oldPromptStart) + remainingForm.slice(oldPromptEnd + '</section>'.length);
+                }
+            }
+            const draftActions = `<div class="flex flex-wrap justify-center gap-2 py-2"><button type="button" onclick="saveStudentActivityDraft('${actId}')" class="rounded-xl border border-sky-300 bg-white px-5 py-3 text-sm font-black text-sky-800"><i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Draf</button><button type="button" onclick="sendStudentActivityAnswers('${actId}')" class="rounded-xl border border-emerald-300 bg-emerald-50 px-5 py-3 text-sm font-black text-emerald-800"><i class="fa-solid fa-paper-plane mr-2"></i>Kirim Jawaban</button></div>`;
+            return `<div class="space-y-4 student-activity-draft-scope" data-activity-id="${actId}">${hero}<div id="student-draft-status-${actId}" class="student-draft-status text-xs font-semibold rounded-lg px-3 py-2 mb-2 bg-emerald-50 text-emerald-700 border border-emerald-100" role="status">✓ Draf otomatis tersimpan di perangkat ini</div>${guidePanel}${remainingForm}${draftActions}</div>`;
         }
 
         function openRoomReading(index) {
