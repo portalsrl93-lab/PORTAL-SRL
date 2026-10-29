@@ -1933,13 +1933,19 @@
                 await fetchTeacherBoardData();
                 // Pengaturan global tidak boleh mengisi identitas sekolah guru lain.
                 resetTeacherSchoolProfile();
-                const profileResult = await apiCall('getTeacherSchoolProfile');
+                const profileIdentity = String(state.teacherAuth?.nip || username || '').trim();
+                const profileResult = await apiCall('getTeacherSchoolProfile', { teacherUsername: profileIdentity, nip: profileIdentity, user_id: profileIdentity });
                 const profileLoadOk = !!profileResult && (profileResult.status === 'success' || profileResult.success === true);
                 if (!profileLoadOk) {
-                    showModal('Profil Sekolah Belum Dimuat', profileResult?.message || 'Tidak dapat membaca profil sekolah dari database. Coba login ulang.', 'warning');
+                    showModal('Profil Sekolah Belum Dimuat', profileResult?.message || 'Tidak dapat membaca profil sekolah dari database. Periksa koneksi lalu coba kembali.', 'warning');
+                } else if (profileResult.exists === false || (!profileResult.exists && !(profileResult.profile || profileResult.data))) {
+                    resetTeacherSchoolProfile();
+                    state.teacherSettings.teacherUsername = profileIdentity;
+                    showModal('Selamat Datang', 'Profil sekolah untuk akun ini belum tersedia. Buka menu Pengaturan untuk mengisi data profil. Setelah disimpan, data akan dimuat otomatis saat login berikutnya.', 'info');
                 } else {
-                    // Mendukung respons backend lama (profile) dan format baru (data).
+                    // Data profil dipasangkan dengan identitas guru yang sedang login.
                     applyTeacherSchoolProfile(profileResult.profile || profileResult.data || {});
+                    state.teacherSettings.teacherUsername = profileIdentity;
                 }
                 navigateTo('guru_board');
                 startTeacherNotificationPolling();
@@ -4095,7 +4101,7 @@ function renderStudentActivityForm(actId) {
 
         // INSTRUMEN PENILAIAN PORTAL-SRL BERDASARKAN TELAAH TOPIK 2 (Dokumen B-D)
         const teacherAssessmentState = {
-            activity: 'all', studentId: 0, query: '', kelas: '',
+            activity: 'all', studentId: 0, selectedStudentFilter: 'all', query: '', kelas: '',
             observation: {}, self: {}, peer: {}, recap: {}
         };
         const teacherAssessmentMap = [
@@ -4176,8 +4182,15 @@ function renderStudentActivityForm(actId) {
         function teacherAssessmentStudents() {
             const all = teacherActivityStudents();
             const q = (teacherAssessmentState.query || '').trim().toLowerCase();
+            const selected = String(teacherAssessmentState.selectedStudentFilter || 'all');
             return all.filter(s => teacherClassMatches(s.kelas) &&
+                (selected === 'all' || String(s.id) === selected || String(s.nisn) === selected) &&
                 (!q || `${s.nama} ${s.kelas} ${s.kelompok}`.toLowerCase().includes(q)));
+        }
+        function teacherAssessmentSetStudentFilter(value) {
+            teacherAssessmentState.selectedStudentFilter = String(value || 'all');
+            teacherAssessmentState.query = '';
+            renderTeacherBoard();
         }
         function teacherAssessmentEnsureStore() {
             state.teacherDataCache = state.teacherDataCache || {};
@@ -4269,7 +4282,7 @@ function renderStudentActivityForm(actId) {
             const activityOptions=`${(kind==='self'||kind==='peer')?`<option value="all" ${teacherAssessmentState.activity==='all'?'selected':''}>Semua Aktivitas (1–5)</option>`:''}${Object.entries(titles).map(([k,v])=>`<option value="${k}" ${((kind==='observation'?act:teacherAssessmentState.activity)===k)?'selected':''}>${k.replace('act','Aktivitas ')}: ${v}</option>`).join('')}`;
             const filters=`<section class="${base} grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
                 ${kind!=='recap'?`<label class="text-xs font-bold text-slate-700">Pilih Aktivitas<select onchange="teacherAssessmentSetActivity(this.value)" data-assessment-activity-filter="true" class="mt-1 w-full rounded-lg border border-sky-200 bg-white p-2.5 text-xs">${activityOptions}</select></label>`:''}
-                <label class="text-xs font-bold text-slate-700">Cari Murid<input value="${escapeHTML(teacherAssessmentState.query)}" oninput="teacherAssessmentState.query=this.value" onchange="renderTeacherBoard()" placeholder="Nama atau kelompok..." class="mt-1 w-full rounded-lg border border-sky-200 p-2.5 text-xs"></label>
+                <label class="text-xs font-bold text-slate-700">PILIH MURID<select onchange="teacherAssessmentSetStudentFilter(this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white p-2.5 text-xs"><option value="all" ${String(teacherAssessmentState.selectedStudentFilter||'all')==='all'?'selected':''}>${kind==='recap'?'Semua Murid':'Semua Murid'}</option>${all.filter(s=>teacherClassMatches(s.kelas)).map(s=>`<option value="${escapeHTML(String(s.id))}" ${String(teacherAssessmentState.selectedStudentFilter)===String(s.id)?'selected':''}>${escapeHTML(s.nama)}${s.kelas?' · '+escapeHTML(s.kelas):''}</option>`).join('')}</select></label>
                 <div class="text-xs font-bold text-slate-700">Kelas Tanggung Jawab<div class="mt-1 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-xs text-emerald-800">${escapeHTML(getTeacherAssignedClass() || 'Belum diatur')}</div></div>
             </section>`;
             const hero=`<section class="rounded-2xl border border-emerald-100 bg-gradient-to-r from-emerald-50 via-cyan-50 to-sky-50 p-5 flex flex-wrap items-center justify-between gap-3">
@@ -4505,7 +4518,9 @@ function renderStudentActivityForm(actId) {
           const val=id=>document.getElementById(id)?.value??'';const t=state.teacherSettings;
           t.schoolName=val('settings-school-name');t.npsn=val('settings-npsn');t.schoolAddress=val('settings-address');t.principal=val('settings-principal');t.principalNip=val('settings-principal-nip').trim();t.schoolYear=val('settings-year');t.schoolDescription=val('settings-description');t.teacherDisplayName=val('settings-teacher-name').trim();t.teacherUsername=val('settings-username').trim()||String(state.teacherAuth?.nip||'').trim();t.teacherClass=getTeacherAssignedClass();t.selectedTopik=val('settings-topic')||t.selectedTopik;if(document.getElementById('settings-header-image'))t.headerImage=val('settings-header-image');t.logoUrl=val('settings-logo-url')||t.logoUrl||'';const color=document.querySelector('input[name="settings-theme"]:checked');if(color)t.themeColor=color.value;
           const profile = Object.fromEntries(TEACHER_SCHOOL_KEYS.map(k=>[k,t[k]||'']));
-          const profileSaved = await apiCall('saveTeacherSchoolProfile',{profile});
+          profile.teacherUsername = String(t.teacherUsername || state.teacherAuth?.nip || '').trim();
+          if (!profile.teacherUsername) { showModal('Identitas Guru Tidak Ditemukan','Silakan login ulang sebelum menyimpan profil.','error'); return; }
+          const profileSaved = await apiCall('saveTeacherSchoolProfile',{profile, teacherUsername:profile.teacherUsername});
           const profileSaveOk = !!profileSaved && (profileSaved.status === 'success' || profileSaved.success === true);
           if(!profileSaveOk){
             showModal('Gagal Menyimpan Profil Sekolah',profileSaved?.message||'Penyimpanan ke database gagal.','error');
