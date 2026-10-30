@@ -5014,6 +5014,8 @@ function renderStudentActivityForm(actId) {
             renderTeacherBoard();
         }
         function teacherAssessmentSetStudent(v) { teacherAssessmentState.studentId=Number(v); renderTeacherBoard(); }
+        function teacherAssessmentOpenStudent(v) { teacherAssessmentState.studentId=Number(v); renderTeacherBoard(); }
+        function teacherAssessmentCloseStudent() { teacherAssessmentState.studentId=0; renderTeacherBoard(); }
         function teacherAssessmentSave(kind, studentId, act, key, value, note='') {
             const store=teacherAssessmentEnsureStore();
             const id=Number(studentId);
@@ -5160,18 +5162,30 @@ function renderStudentActivityForm(actId) {
         function renderTeacherAssessmentView(menu) {
             if (menu === 'penilaian_rekap') return renderTeacherFinalRecap();
             const store=teacherAssessmentEnsureStore();
+            const kind=menu==='penilaian_observasi'?'observation':menu==='penilaian_diri'?'self':menu==='penilaian_sebaya'?'peer':'recap';
+            if (kind==='self' || kind==='peer') {
+                if (teacherAssessmentState.activeMenu !== menu) {
+                    teacherAssessmentState.studentId=0;
+                    teacherAssessmentState.activeMenu=menu;
+                }
+                teacherAssessmentState.selectedStudentFilter='all';
+                if (teacherAssessmentState.activity==='all' ||
+                    (kind==='peer' && !(studentAPKItems[teacherAssessmentState.activity]?.peer||[]).length)) {
+                    teacherAssessmentState.activity='act1';
+                }
+            }
             const all=teacherActivityStudents();
             const students=teacherAssessmentStudents();
-            const selected=students.find(s=>s.id===Number(teacherAssessmentState.studentId))||students[0]||null;
+            const selected=students.find(s=>s.id===Number(teacherAssessmentState.studentId))||
+                ((kind==='self'||kind==='peer')?null:(students[0]||null));
             if(selected && teacherAssessmentState.studentId!==selected.id) teacherAssessmentState.studentId=selected.id;
             const act=teacherAssessmentState.activity==='all'?'act1':teacherAssessmentState.activity;
             const actName={act1:'Aktivitas 1',act2:'Aktivitas 2',act3:'Aktivitas 3',act4:'Aktivitas 4',act5:'Aktivitas 5'}[act];
             const titles={act1:'Ayo, Kenali Jenis-Jenis Sampah!',act2:'Ayo, Pahami Dampak Sampah!',act3:'Ayo, Kelompokkan Sampah Sesuai Jenisnya!',act4:'Ayo, Belajar Mengelola Sampah!',act5:'Menyusun Kebiasaan Baik Berkelanjutan'};
-            const kind=menu==='penilaian_observasi'?'observation':menu==='penilaian_diri'?'self':menu==='penilaian_sebaya'?'peer':'recap';
             const headings={observation:'Observasi Guru',self:'Penilaian Diri Murid',peer:'Penilaian Teman Sebaya',recap:'Rekap Profil Pencapaian APK'};
             const colors={observation:'emerald',self:'sky',peer:'violet',recap:'amber'};
             const base=`rounded-2xl border border-sky-100 bg-white p-4`;
-            const activityOptions=`${(kind==='self'||kind==='peer')?`<option value="all" ${teacherAssessmentState.activity==='all'?'selected':''}>Semua Aktivitas (1–5)</option>`:''}${Object.entries(titles).map(([k,v])=>`<option value="${k}" ${((kind==='observation'?act:teacherAssessmentState.activity)===k)?'selected':''}>${k.replace('act','Aktivitas ')}: ${v}</option>`).join('')}`;
+            const activityOptions=`${Object.entries(titles).map(([k,v])=>`<option value="${k}" ${((kind==='observation'?act:teacherAssessmentState.activity)===k)?'selected':''}>${k.replace('act','Aktivitas ')}: ${v}</option>`).join('')}`;
             const filters=`<section class="${base} grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
                 ${kind!=='recap'?`<label class="text-xs font-bold text-slate-700">Pilih Aktivitas<select onchange="teacherAssessmentSetActivity(this.value)" data-assessment-activity-filter="true" class="mt-1 w-full rounded-lg border border-sky-200 bg-white p-2.5 text-xs">${activityOptions}</select></label>`:''}
                 <label class="text-xs font-bold text-slate-700">PILIH MURID<select onchange="teacherAssessmentSetStudentFilter(this.value)" class="mt-1 w-full rounded-lg border border-sky-200 bg-white p-2.5 text-xs"><option value="all" ${String(teacherAssessmentState.selectedStudentFilter||'all')==='all'?'selected':''}>${kind==='recap'?'Semua Murid':'Semua Murid'}</option>${all.filter(s=>teacherClassMatches(s.kelas)).map(s=>`<option value="${escapeHTML(String(s.id))}" ${String(teacherAssessmentState.selectedStudentFilter)===String(s.id)?'selected':''}>${escapeHTML(s.nama)}${s.kelas?' · '+escapeHTML(s.kelas):''}</option>`).join('')}</select></label>
@@ -5203,84 +5217,151 @@ function renderStudentActivityForm(actId) {
                 return `<div class="space-y-4 text-blue-950">${hero}${filters}<section class="${base}"><div class="mb-3"><h2 class="font-black">Rekap Nilai dan Profil Pencapaian APK</h2><p class="text-xs text-slate-500 mt-1">Tetapkan tahap pada masing-masing dari sembilan subdimensi berdasarkan rubrik, observasi, self-assessment, peer assessment, dan bukti belajar yang relevan. Tidak ada rata-rata atau label gabungan per dimensi.</p></div><div class="overflow-x-auto"><table class="w-full min-w-[800px] text-left text-xs"><thead class="bg-emerald-50"><tr><th class="p-3">No.</th><th class="p-3">Nama Murid</th><th class="p-3">Tahap Perkembangan per Subdimensi dan Catatan</th></tr></thead><tbody>${rows||'<tr><td colspan="3" class="p-6 text-center">Belum ada data murid.</td></tr>'}</tbody></table></div><p class="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">Catatan: hasil akhir ditetapkan guru melalui interpretasi bukti aktual dan deskriptor APK. Jika bukti belum memadai, kumpulkan bukti tambahan sebelum menetapkan tahap.</p></section><section class="${base}"><div class="mb-3 flex flex-wrap items-start justify-between gap-2"><div><h2 class="font-black">Rekap Observasi Guru per Murid</h2><p class="mt-1 text-xs text-slate-500">Ringkasan hasil ceklis Teramati / Belum Teramati pada seluruh aktivitas dan indikator. Buka nama murid untuk melihat rincian dan catatan guru. Rekap ini merupakan bukti pendukung, bukan penetapan otomatis tahap APK.</p></div><button onclick="teacherAssessmentExport('observation')" class="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-50"><i class="fa-solid fa-download mr-1"></i>Ekspor Data Observasi</button></div><div class="space-y-2">${observationRecapRows||'<div class="rounded-lg bg-slate-50 p-4 text-center text-xs text-slate-500">Belum ada data murid untuk direkap.</div>'}</div><p class="mt-3 rounded-lg bg-sky-50 p-3 text-xs text-sky-900">Keterangan: “Belum Diisi” berarti belum ada ceklis yang tersimpan untuk indikator tersebut. Data rekap mengikuti catatan observasi yang tersedia pada sesi portal ini.</p></section></div>`;
             }
             if(kind==='self' || kind==='peer') {
-                const reportRows = students.map((s, i) => {
-                    const selectedActivityFilter = (teacherAssessmentState.activity === 'all' || /^act[1-5]$/.test(String(teacherAssessmentState.activity))) ? String(teacherAssessmentState.activity) : 'all';
-                    const activityRecords = Object.keys(titles).filter(activityId => selectedActivityFilter === 'all' || activityId === selectedActivityFilter).map(activityId => {
-                        const sub = teacherActivitySubmission(s, activityId) || {};
-                        const answers = (sub.answers && typeof sub.answers === 'object') ? sub.answers : ((sub.data?.answers && typeof sub.data.answers === 'object') ? sub.data.answers : {});
-                        const prefix = `${activityId}_${kind}`;
-                        const rawValue = kind === 'self'
-                            ? (sub.self_assessment ?? sub.selfAssessment ?? sub.self ?? answers.self_assessment ?? answers[prefix] ?? sub[prefix])
-                            : (sub.peer_assessment ?? sub.peerAssessment ?? sub.peer ?? answers.peer_assessment ?? answers[prefix] ?? sub[prefix]);
-                        const parseValue = value => {
-                            if (typeof value !== 'string') return value;
-                            const trimmed = value.trim();
-                            if (!trimmed) return '';
-                            try { return JSON.parse(trimmed); } catch (_) { return value; }
-                        };
-                        const raw = parseValue(rawValue);
-                        const normalized = {};
-                        const addEntries = source => {
-                            source = parseValue(source);
-                            if (!source || typeof source !== 'object' || Array.isArray(source)) return;
-                            Object.entries(source).forEach(([key, value]) => {
-                                if (key === prefix) {
-                                    const nested = parseValue(value);
-                                    if (nested && typeof nested === 'object' && !Array.isArray(nested)) Object.assign(normalized, nested);
-                                } else if (key.startsWith(`${prefix}_`)) {
-                                    normalized[key.slice(prefix.length + 1)] = value;
-                                } else if (!key.startsWith('act') &&
-                                    !['peer_target','peerTarget','target','teman','teman_dinilai','nama_teman','self_assessment','peer_assessment','selfAssessment','peerAssessment','answers','data','timestamp','nisn','nama','kelas','kelompok','act_id','actId','status_misi'].includes(key) &&
-                                    (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')) {
-                                    normalized[key] = value;
-                                }
-                            });
-                        };
-                        addEntries(raw);
-                        // Flattened answer keys are also supported for older submissions.
-                        addEntries(answers);
-                        addEntries(sub);
-                        const config = (typeof studentAPKItems !== 'undefined' && studentAPKItems[activityId]) ? studentAPKItems[activityId][kind] || [] : [];
-                        const labelByKey = Object.fromEntries(config.map(item => [item.key, item.text]));
-                        const answerRows = [];
-                        config.forEach(item => {
-                            const value = normalized[item.key];
-                            if (value !== undefined && value !== null && String(value).trim() !== '') {
-                                answerRows.push({label:item.text, value:String(value)});
+                // Halaman Penilaian Diri/Teman Sebaya dipisahkan: pilih aktivitas,
+                // pilih nama murid, lalu baca hanya instrumen sesuai menu aktif.
+                const activityId = act;
+                const config = (typeof studentAPKItems !== 'undefined' && studentAPKItems[activityId])
+                    ? (studentAPKItems[activityId][kind] || []) : [];
+                const parseAssessmentValue = value => {
+                    if (typeof value !== 'string') return value;
+                    const text = value.trim();
+                    if (!text) return '';
+                    try { return JSON.parse(text); } catch (_) { return value; }
+                };
+                const getAssessmentData = student => {
+                    const sub = teacherActivitySubmission(student, activityId) || {};
+                    const answers = (sub.answers && typeof sub.answers === 'object') ? sub.answers
+                        : ((sub.data?.answers && typeof sub.data.answers === 'object') ? sub.data.answers : {});
+                    const prefix = `${activityId}_${kind}`;
+                    let raw = kind === 'self'
+                        ? (sub.self ?? sub.self_assessment ?? sub.selfAssessment ?? answers.self_assessment ?? answers[prefix] ?? sub[prefix])
+                        : (sub.peer ?? sub.peer_assessment ?? sub.peerAssessment ?? answers.peer_assessment ?? answers[prefix] ?? sub[prefix]);
+                    raw = parseAssessmentValue(raw);
+                    const values = {};
+                    let target = sub.peer_target ?? sub.peerTarget ?? sub.nama_teman ?? sub.namaTeman ??
+                        answers[`${activityId}_peer_target`] ?? answers.peer_target ?? '';
+                    const add = source => {
+                        source = parseAssessmentValue(source);
+                        if (!source || typeof source !== 'object' || Array.isArray(source)) return;
+                        Object.entries(source).forEach(([key, value]) => {
+                            const parsed = parseAssessmentValue(value);
+                            if (kind === 'peer' && /^(peer_target|peerTarget|target|teman|teman_dinilai|nama_teman|namaTeman)$/i.test(key)) {
+                                if (parsed !== '' && parsed !== null && parsed !== undefined) target = parsed;
+                                return;
                             }
+                            if (key === prefix || key === `${activityId}_${kind}_assessment`) {
+                                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) add(parsed);
+                                return;
+                            }
+                            const fullPrefix = `${prefix}_`;
+                            if (key.startsWith(fullPrefix)) {
+                                values[key.slice(fullPrefix.length)] = parsed;
+                                return;
+                            }
+                            const activityPrefix = `${activityId}_`;
+                            if (key.startsWith(activityPrefix)) {
+                                const shortKey = key.slice(activityPrefix.length);
+                                if (kind === 'peer' && shortKey === 'peer_target') { target = parsed; return; }
+                                if (shortKey.startsWith(`${kind}_`)) {
+                                    values[shortKey.slice(kind.length + 1)] = parsed;
+                                    return;
+                                }
+                            }
+                            if (config.some(item => item.key === key)) values[key] = parsed;
                         });
-                        // Keep any additional stored indicator visible without exposing JSON syntax.
-                        Object.entries(normalized).forEach(([key, value]) => {
-                            if (labelByKey[key] || value === undefined || value === null || String(value).trim() === '') return;
-                            const label = (typeof teacherPortfolioHumanLabel === 'function')
-                                ? teacherPortfolioHumanLabel(key)
-                                : key.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase());
-                            answerRows.push({label, value:String(value)});
-                        });
-                        const target = sub.peer_target ?? sub.peerTarget ?? sub.nama_teman ?? sub.namaTeman ?? sub.target_name ??
-                            answers[`${activityId}_peer_target`] ?? answers.peer_target ?? normalized.peer_target ?? normalized.target ?? normalized.teman_dinilai ?? '';
-                        const timestamp = sub.timestamp || sub.updatedAt || sub.updated_at || sub.createdAt || sub.created_at || '';
-                        const targetText = String(target || '').trim();
-                        const matchedPeer = targetText ? all.find(m => String(m.nisn || '') === targetText || String(m.id || '') === targetText || String(m.nama || '').toLowerCase() === targetText.toLowerCase()) : null;
-                        const targetDisplay = matchedPeer ? `${matchedPeer.nama}${matchedPeer.kelas ? ' · ' + matchedPeer.kelas : ''}` : targetText;
-                        const submitted = answerRows.length > 0 || !!targetText;
-                        return {activityId, activityName:titles[activityId], answerRows, target:targetDisplay, timestamp:String(timestamp||''), submitted};
+                    };
+                    add(raw);
+                    // Mendukung format lama yang menyimpan setiap indikator sebagai kolom/key terpisah.
+                    add(answers);
+                    add(sub);
+                    const rows = config.filter(item => values[item.key] !== undefined && values[item.key] !== null && String(values[item.key]).trim() !== '')
+                        .map(item => ({label:item.text, value:String(values[item.key])}));
+                    const known = new Set(config.map(item => item.key));
+                    Object.entries(values).forEach(([key, value]) => {
+                        if (known.has(key) || value === undefined || value === null || String(value).trim() === '') return;
+                        rows.push({label:teacherPortfolioHumanLabel(key), value:String(value)});
                     });
-                    const submittedCount = activityRecords.filter(x=>x.submitted).length;
-                    const activityCards = activityRecords.map(rec => {
-                        const answerContent = rec.answerRows.length
-                            ? `<div class="mt-3 space-y-2">${rec.answerRows.map(row => `<div class="rounded-lg border border-slate-100 bg-slate-50 p-3"><p class="text-xs font-semibold leading-relaxed text-slate-700">${escapeHTML(row.label)}</p><div class="mt-2"><span class="inline-flex rounded-full ${kind==='self'?'bg-violet-100 text-violet-800':'bg-amber-100 text-amber-800'} px-3 py-1.5 text-xs font-black">${escapeHTML(row.value)}</span></div></div>`).join('')}</div>`
-                            : `<p class="mt-2 text-xs italic text-slate-400">Belum ada data ${kind==='self'?'penilaian diri':'penilaian teman sebaya'} yang tersimpan untuk aktivitas ini.</p>`;
-                        let timeLabel = rec.timestamp;
-                        if (timeLabel) {
-                            const parsedDate = new Date(timeLabel);
-                            if (!Number.isNaN(parsedDate.getTime())) timeLabel = parsedDate.toLocaleString('id-ID');
-                        }
-                        return `<div class="rounded-xl border ${rec.submitted?'border-emerald-100':'border-slate-100'} p-3"><div class="flex flex-wrap items-start justify-between gap-2"><div><h4 class="font-bold text-slate-800">${escapeHTML(rec.activityName)}</h4>${kind==='peer' && rec.target ? `<p class="mt-1 text-xs text-violet-700"><i class="fa-solid fa-user-check mr-1"></i>Teman yang dinilai: ${escapeHTML(rec.target)}</p>`:''}</div><span class="rounded-full px-2 py-1 text-[10px] font-bold ${rec.submitted?'bg-emerald-50 text-emerald-700':'bg-slate-100 text-slate-500'}">${rec.submitted?'Sudah dikirim':'Belum ada jawaban'}</span></div>${answerContent}${timeLabel?`<p class="mt-2 text-[10px] text-slate-400">Waktu pengiriman: ${escapeHTML(timeLabel)}</p>`:''}</div>`;
-                    }).join('');
-                    return `<details class="rounded-2xl border border-sky-100 bg-white" ${i===0?'open':''}><summary class="cursor-pointer list-none p-4 flex flex-wrap items-center justify-between gap-2"><span><b>${escapeHTML(s.nama)}</b><span class="ml-2 text-xs text-slate-500">${escapeHTML(s.kelas)} · ${escapeHTML(s.kelompok)}</span></span><span class="rounded-full ${submittedCount?'bg-emerald-50 text-emerald-700':'bg-slate-100 text-slate-500'} px-3 py-1 text-xs font-bold">${submittedCount}/${activityRecords.length} aktivitas memiliki data</span></summary><div class="grid grid-cols-1 xl:grid-cols-2 gap-3 border-t border-slate-100 p-4">${activityCards}</div></details>`;
+                    const targetText = target && typeof target === 'object'
+                        ? String(target.nama || target.name || target.nisn || target.id || '')
+                        : String(target || '').trim();
+                    const matched = targetText ? teacherActivityStudents().find(m =>
+                        String(m.nisn || '') === targetText ||
+                        String(m.id || '') === targetText ||
+                        String(m.nama || '').toLowerCase() === targetText.toLowerCase()
+                    ) : null;
+                    return {
+                        rows,
+                        target: matched ? `${matched.nama}${matched.kelas ? ' · ' + matched.kelas : ''}` : targetText,
+                        timestamp: sub.timestamp || sub.updatedAt || sub.updated_at || '',
+                        submitted: rows.length > 0 || !!targetText
+                    };
+                };
+
+                const selectedStudent = students.find(s => String(s.id) === String(teacherAssessmentState.studentId)) || null;
+                const studentRows = students.map((student, index) => {
+                    const data = getAssessmentData(student);
+                    return `<button type="button" onclick="teacherAssessmentOpenStudent('${String(student.id).replace(/'/g,"\\'")}')" class="w-full rounded-xl border ${selectedStudent && String(selectedStudent.id)===String(student.id) ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-white hover:border-emerald-300 hover:bg-emerald-50/50'} p-3 text-left transition">
+                        <span class="flex items-center justify-between gap-2"><span class="min-w-0"><b class="block truncate text-sm text-slate-800">${index+1}. ${escapeHTML(student.nama)}</b><span class="mt-1 block text-[10px] text-slate-500">${escapeHTML(student.kelas)} · ${escapeHTML(student.kelompok || '')}</span></span>
+                        <span class="shrink-0 rounded-full px-2.5 py-1 text-[10px] font-black ${data.submitted?'bg-emerald-100 text-emerald-800':'bg-slate-100 text-slate-500'}">${data.submitted?'Sudah mengisi':'Belum mengisi'}</span></span>
+                        ${kind==='peer' && data.target ? `<span class="mt-2 block text-[11px] text-violet-700"><i class="fa-solid fa-user-check mr-1"></i>Menilai: ${escapeHTML(data.target)}</span>` : ''}
+                    </button>`;
                 }).join('');
-                return `<div class="space-y-4 text-blue-950">${hero}<section class="${base}"><div class="grid grid-cols-1 sm:grid-cols-3 gap-3"><div class="rounded-xl bg-sky-50 p-3"><p class="text-xs text-sky-700">Jenis laporan</p><p class="mt-1 font-black">${kind==='self'?'Penilaian Diri Murid':'Penilaian Teman Sebaya'}</p></div><div class="rounded-xl bg-emerald-50 p-3"><p class="text-xs text-emerald-700">Jumlah murid</p><p class="mt-1 font-black">${students.length}</p></div><div class="rounded-xl bg-violet-50 p-3"><p class="text-xs text-violet-700">Sumber data</p><p class="mt-1 text-sm font-bold">Kiriman murid yang tersedia di portal</p></div></div><p class="mt-3 text-xs leading-relaxed text-slate-600">Halaman ini merupakan laporan baca-saja. Guru tidak memberi nilai ulang dan jawaban asli murid tidak diubah. Jika data belum tersedia, periksa apakah murid sudah mengirim jawaban dan backend sudah mengirimkan kolom penilaian ke portal guru.</p></section>${filters}<section class="space-y-3">${reportRows||`<div class="rounded-xl border bg-white p-6 text-center text-sm text-slate-500">Belum ada murid pada kelas tanggung jawab ini.</div>`}</section></div>`;
+
+                let detail = `<section class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
+                    <i class="fa-solid ${kind==='self'?'fa-user-check':'fa-people-arrows-left-right'} text-3xl text-slate-300"></i>
+                    <h3 class="mt-3 font-black text-slate-700">Pilih nama murid</h3>
+                    <p class="mt-1 text-sm text-slate-500">Klik salah satu nama pada daftar untuk melihat ${kind==='self'?'jawaban penilaian diri':'penilaian teman sebaya'} pada ${actName}.</p>
+                </section>`;
+                if (selectedStudent) {
+                    const data = getAssessmentData(selectedStudent);
+                    const rows = data.rows.length ? data.rows.map((row, index) =>
+                        `<div class="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                            <p class="text-xs font-bold leading-relaxed text-slate-700">${index+1}. ${escapeHTML(row.label)}</p>
+                            <span class="mt-2 inline-flex rounded-full ${kind==='self'?'bg-sky-100 text-sky-800':'bg-violet-100 text-violet-800'} px-3 py-1.5 text-xs font-black">${escapeHTML(row.value)}</span>
+                        </div>`
+                    ).join('') : `<p class="rounded-xl bg-slate-50 p-4 text-sm italic text-slate-400">Belum ada jawaban ${kind==='self'?'penilaian diri':'penilaian teman sebaya'} untuk aktivitas ini.</p>`;
+                    let timeLabel = data.timestamp;
+                    if (timeLabel) {
+                        const date = new Date(timeLabel);
+                        if (!Number.isNaN(date.getTime())) timeLabel = date.toLocaleString('id-ID');
+                    }
+                    detail = `<section class="rounded-2xl border ${kind==='self'?'border-sky-100':'border-violet-100'} bg-white p-4">
+                        <div class="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3">
+                            <div><p class="text-[10px] font-black uppercase tracking-wider ${kind==='self'?'text-sky-700':'text-violet-700'}">${kind==='self'?'HASIL PENILAIAN DIRI':'HASIL PENILAIAN TEMAN SEBAYA'} · ${escapeHTML(actName)}</p>
+                                <h3 class="mt-1 text-lg font-black text-slate-900">${escapeHTML(selectedStudent.nama)}</h3>
+                                <p class="text-xs text-slate-500">${escapeHTML(selectedStudent.kelas)} · ${escapeHTML(selectedStudent.kelompok || '')}</p>
+                            </div>
+                            <button type="button" onclick="teacherAssessmentCloseStudent()" class="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50"><i class="fa-solid fa-arrow-left mr-1"></i>Kembali ke daftar</button>
+                        </div>
+                        ${kind==='peer' ? `<div class="mt-3 rounded-xl bg-violet-50 p-3"><p class="text-[10px] font-black uppercase text-violet-600">Penilai</p><p class="mt-1 text-sm font-black text-violet-950">${escapeHTML(selectedStudent.nama)}</p><p class="mt-2 text-[10px] font-black uppercase text-violet-600">Murid yang dinilai</p><p class="mt-1 text-sm font-black text-violet-950">${data.target ? escapeHTML(data.target) : 'Nama teman yang dinilai belum ditemukan pada data kiriman.'}</p></div>` : ''}
+                        <div class="mt-4"><h4 class="mb-2 text-sm font-black text-slate-800">${kind==='self'?'Pernyataan dan jawaban murid':'Hasil penilaian yang diberikan murid'}</h4><div class="grid grid-cols-1 gap-2 md:grid-cols-2">${rows}</div></div>
+                        ${timeLabel?`<p class="mt-3 text-[10px] text-slate-400">Waktu pengiriman: ${escapeHTML(timeLabel)}</p>`:''}
+                    </section>`;
+                }
+                const activityStudentCount = students.length;
+                const submittedTotal = students.filter(s=>getAssessmentData(s).submitted).length;
+                return `<div class="space-y-4 text-blue-950">${hero}
+                    <section class="${base}">
+                        <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                            <div class="rounded-xl bg-sky-50 p-3"><p class="text-xs text-sky-700">Jenis laporan</p><p class="mt-1 font-black">${kind==='self'?'Penilaian Diri Murid':'Penilaian Teman Sebaya'}</p></div>
+                            <div class="rounded-xl bg-emerald-50 p-3"><p class="text-xs text-emerald-700">Murid mengisi</p><p class="mt-1 font-black">${submittedTotal} / ${activityStudentCount}</p></div>
+                            <div class="rounded-xl bg-violet-50 p-3"><p class="text-xs text-violet-700">Aktivitas terpilih</p><p class="mt-1 font-black">${escapeHTML(actName)}</p></div>
+                        </div>
+                        <p class="mt-3 text-xs leading-relaxed text-slate-600">${kind==='self'?'Halaman ini hanya menampilkan respons penilaian diri yang dikirim murid.':'Halaman ini menampilkan murid sebagai penilai, nama teman yang dipilihnya, dan jawaban yang diberikan. Setiap aktivitas ditampilkan secara terpisah.'} Data bersifat baca-saja dan jawaban asli tidak diubah.</p>
+                    </section>
+                    <section class="${base}">
+                        <label class="block text-xs font-black text-slate-700">PILIH AKTIVITAS
+                            <select onchange="teacherAssessmentSetActivity(this.value)" data-assessment-activity-filter="true" class="mt-1 w-full rounded-lg border border-sky-200 bg-white p-2.5 text-xs">
+                                ${Object.entries(titles).filter(([key])=>kind==='self' || (studentAPKItems[key]?.peer||[]).length>0).map(([key,title])=>`<option value="${key}" ${activityId===key?'selected':''}>${key.replace('act','Aktivitas ')}: ${title}</option>`).join('')}
+                            </select>
+                        </label>
+                        <div class="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-600">Kelas tanggung jawab: <b>${escapeHTML(getTeacherAssignedClass() || 'Belum diatur')}</b></div>
+                    </section>
+                    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(260px,.8fr)_minmax(0,1.7fr)]">
+                        <section class="${base}"><div class="mb-3 flex items-center justify-between gap-2"><h3 class="font-black text-slate-800">Daftar Murid</h3><span class="text-[10px] text-slate-400">${students.length} murid</span></div><div class="space-y-2">${studentRows || '<p class="rounded-lg bg-slate-50 p-4 text-center text-xs text-slate-500">Belum ada murid pada kelas tanggung jawab ini.</p>'}</div></section>
+                        <div>${detail}</div>
+                    </div>
+                </div>`;
             }
             const cfgs=teacherAssessmentMap.filter(x=>x.act===act&&(kind==='observation'||kind==='self'?true:!!x.peer));
             if(kind==='peer' && !cfgs.length) return `<div class="space-y-4 text-blue-950">${hero}${filters}<section class="${base}"><h2 class="font-black">Penilaian teman sebaya belum dipetakan untuk Aktivitas 5</h2><p class="mt-2 text-sm text-slate-600">Berdasarkan telaah Topik 2, instrumen peer assessment tersedia dan dipetakan untuk Aktivitas 1–4. Aktivitas 5 menggunakan refleksi, self-assessment, observasi guru, dokumentasi, dan tindak lanjut.</p></section></div>`;
