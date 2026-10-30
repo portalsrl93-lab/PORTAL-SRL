@@ -5245,7 +5245,16 @@ function renderStudentActivityForm(actId) {
                         if (!source || typeof source !== 'object' || Array.isArray(source)) return;
                         Object.entries(source).forEach(([key, value]) => {
                             const parsed = parseAssessmentValue(value);
-                            if (kind === 'peer' && /^(peer_target|peerTarget|target|teman|teman_dinilai|nama_teman|namaTeman)$/i.test(key)) {
+                            // peer_target dapat tersimpan sebagai key lengkap (act1_peer_target),
+                            // sebagai peer_target, atau sebagai target di dalam objek peer.
+                            // Tangkap lebih dahulu sebelum pemetaan indikator agar ID teman
+                            // tidak salah ditampilkan sebagai butir penilaian bernama "Target".
+                            const isPeerTargetKey = kind === 'peer' && (
+                                /^(peer_target|peerTarget|target|teman|teman_dinilai|nama_teman|namaTeman)$/i.test(key) ||
+                                key === `${activityId}_peer_target` ||
+                                key === `${prefix}_target`
+                            );
+                            if (isPeerTargetKey) {
                                 if (parsed !== '' && parsed !== null && parsed !== undefined) target = parsed;
                                 return;
                             }
@@ -5282,16 +5291,30 @@ function renderStudentActivityForm(actId) {
                         rows.push({label:teacherPortfolioHumanLabel(key), value:String(value)});
                     });
                     const targetText = target && typeof target === 'object'
-                        ? String(target.nama || target.name || target.nisn || target.id || '')
-                        : String(target || '').trim();
-                    const matched = targetText ? teacherActivityStudents().find(m =>
-                        String(m.nisn || '') === targetText ||
-                        String(m.id || '') === targetText ||
-                        String(m.nama || '').toLowerCase() === targetText.toLowerCase()
-                    ) : null;
+                        ? String(target.nama || target.name || target.nisn || target.ID_NISN || target.id || target.value || '')
+                        : String(target ?? '').trim();
+                    const normalizeIdentity = value => String(value ?? '').trim().replace(/\.0$/, '').toLowerCase();
+                    const normalizeDigits = value => String(value ?? '').replace(/\D/g, '');
+                    const roster = teacherActivityStudents();
+                    const targetNorm = normalizeIdentity(targetText);
+                    const targetDigits = normalizeDigits(targetText);
+                    const matched = targetNorm ? roster.find(m => {
+                        const candidates = [m.nisn, m.id, m.nama, m.name, m.ID_NISN];
+                        return candidates.some(candidate => {
+                            const candidateNorm = normalizeIdentity(candidate);
+                            if (!candidateNorm) return false;
+                            if (candidateNorm === targetNorm) return true;
+                            const candidateDigits = normalizeDigits(candidate);
+                            return !!targetDigits && !!candidateDigits && candidateDigits === targetDigits;
+                        });
+                    }) : null;
+                    // Jangan pernah menampilkan NISN/ID mentah sebagai indikator atau nama.
+                    const targetLabel = matched
+                        ? `${matched.nama}${matched.kelas ? ' · ' + matched.kelas : ''}`
+                        : (targetText ? 'Identitas teman tersimpan, tetapi belum cocok dengan daftar murid kelas ini.' : '');
                     return {
                         rows,
-                        target: matched ? `${matched.nama}${matched.kelas ? ' · ' + matched.kelas : ''}` : targetText,
+                        target: targetLabel,
                         timestamp: sub.timestamp || sub.updatedAt || sub.updated_at || '',
                         submitted: rows.length > 0 || !!targetText
                     };
