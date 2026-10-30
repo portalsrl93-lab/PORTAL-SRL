@@ -1650,9 +1650,30 @@
         function activityDraftKey(actId, userId = state.student?.nisn) {
             return `draft_srl_akt_${String(actId || '').replace('act','')}_${String(userId || '').trim()}`;
         }
+        // Tautan bukti (Drive/Docs/URL lain) tidak boleh dipulihkan sebagai jawaban teks pemantik.
+        function isStudentEvidenceUrlOnly(value) {
+            const text = String(value == null ? '' : value).trim();
+            return /^(?:(?:https?:\/\/)|www\.)\S+$/i.test(text) ||
+                   /^(?:drive|docs)\.google\.com\/\S*$/i.test(text);
+        }
+        function sanitizeStudentPromptAnswers(source, actId) {
+            const cleaned = { ...(source && typeof source === 'object' ? source : {}) };
+            Object.keys(cleaned).forEach(key => {
+                if (/^act[1-5]_jawaban_\d+$/i.test(key) || /^act[1-5]_pemantik_/i.test(key)) {
+                    if (isStudentEvidenceUrlOnly(cleaned[key])) delete cleaned[key];
+                }
+            });
+            return cleaned;
+        }
+        function sanitizeAllStudentPromptAnswers() {
+            state.student.answers = sanitizeStudentPromptAnswers(state.student.answers || {});
+            return state.student.answers;
+        }
+
         function getActivityAnswers(actId) {
             const all = state.student?.answers || {};
-            return Object.fromEntries(Object.entries(all).filter(([key]) => key.startsWith(`${actId}_`)));
+            const selected = Object.fromEntries(Object.entries(all).filter(([key]) => key.startsWith(`${actId}_`)));
+            return sanitizeStudentPromptAnswers(selected, actId);
         }
         function persistActivityDraftLocal(actId) {
             try {
@@ -1719,21 +1740,35 @@
                 // Baca draf setelah respons server diterima agar ketikan yang dibuat saat fetch berlangsung ikut dipertahankan.
                 const localDraft = readActivityDraftLocal(actId, id);
                 if (serverData) {
-                    const promptData = serverData.jawabanPemantik && typeof serverData.jawabanPemantik === 'object' ? serverData.jawabanPemantik : {};
+                    const promptDataRaw = serverData.jawabanPemantik && typeof serverData.jawabanPemantik === 'object' ? serverData.jawabanPemantik : {};
+                    const promptData = sanitizeStudentPromptAnswers(promptDataRaw, actId);
                     const reflectionData = serverData.refleksiDiri && typeof serverData.refleksiDiri === 'object' ? serverData.refleksiDiri : {};
                     Object.assign(state.student.answers, promptData, reflectionData);
+                    // Hapus URL lama yang pernah tersimpan pada kunci jawaban pemantik.
+                    Object.keys(state.student.answers).forEach(key => {
+                        if (key.startsWith(`${actId}_`) && (/^act[1-5]_jawaban_\d+$/i.test(key) || /^act[1-5]_pemantik_/i.test(key)) && isStudentEvidenceUrlOnly(state.student.answers[key])) {
+                            delete state.student.answers[key];
+                        }
+                    });
                     if (serverData.urlLkpd) state.student.answers[`${actId}_lkpd_url`] = serverData.urlLkpd;
                     if (serverData.urlDokumentasi) state.student.answers[`${actId}_photo_url`] = serverData.urlDokumentasi;
                     state.student.progress[actId] = String(serverData.statusAksi || '').toLowerCase() === 'selesai';
                 }
                 // Draf lokal selalu di-merge terakhir agar ketikan paling baru tidak tertimpa server.
-                if (localDraft?.answers) Object.assign(state.student.answers, localDraft.answers);
+                if (localDraft?.answers) Object.assign(state.student.answers, sanitizeStudentPromptAnswers(localDraft.answers, actId));
+                sanitizeAllStudentPromptAnswers();
+                // Tulis ulang draft lokal dalam keadaan bersih agar URL lama tidak muncul lagi saat login berikutnya.
+                persistActivityDraftLocal(actId);
+                persistStudentDraft();
                 if (state.student.currentSection === actId) renderStudentBoard();
             } catch (err) {
                 studentActivityServerLoads.delete(loadKey);
                 console.warn('Pemulihan aktivitas dari server gagal; draf lokal tetap tersedia:', err);
                 const localDraft = readActivityDraftLocal(actId, id);
-                if (localDraft?.answers) Object.assign(state.student.answers, localDraft.answers);
+                if (localDraft?.answers) Object.assign(state.student.answers, sanitizeStudentPromptAnswers(localDraft.answers, actId));
+                sanitizeAllStudentPromptAnswers();
+                persistActivityDraftLocal(actId);
+                persistStudentDraft();
                 if (state.student.currentSection === actId) renderStudentBoard();
             }
         }
@@ -1832,6 +1867,14 @@
             document.addEventListener('change', persistActivityFormDraft);
         }
         function updateStudentAnswerLocally(key, value) {
+            if (/^act[1-5]_jawaban_\d+$/i.test(String(key || '')) && isStudentEvidenceUrlOnly(value)) {
+                state.student.answers[key] = '';
+                persistStudentDraft();
+                const actKey = String(key).split('_')[0];
+                if (/^act[1-5]$/.test(actKey)) persistActivityDraftLocal(actKey);
+                showModal('Tautan Tidak Dapat Dimasukkan', 'Kolom ini khusus untuk jawaban teks. Tautan Google Drive harus dimasukkan melalui bagian unggah bukti LKPD atau foto dokumentasi.', 'warning');
+                return;
+            }
             state.student.answers[key] = value;
             if (key === 'stimulasi_respon') {
                 state.student.progress.stimulasi = false;
@@ -2302,6 +2345,9 @@
                 state.student.answers = { ...(state.student.answers || {}), ...(localDraft.answers || {}) };
                 if (localDraft.progress) state.student.progress = { ...state.student.progress, ...localDraft.progress };
             }
+            // Bersihkan jawaban pemantik lama yang berisi URL dari STUDENT_SUBMISSIONS/draft lokal.
+            sanitizeAllStudentPromptAnswers();
+            persistStudentDraft();
 
             closeLoginPopup();
             state.student.currentSection = 'beranda';
