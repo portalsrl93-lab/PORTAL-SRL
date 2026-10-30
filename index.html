@@ -779,6 +779,13 @@
 }
 </style>
 
+
+<style id="portal-srl-activity-submit-actions">
+.student-activity-shell .activity-submit-layout{margin-top:8px}
+.student-activity-shell .activity-primary-actions button{min-width:165px;min-height:48px}
+@media(max-width:760px){.student-activity-shell .activity-primary-actions button{width:100%;min-width:0}}
+</style>
+
 </head>
 <body class="overflow-x-hidden min-h-screen bg-[#f4f9f1]">
 <div id="srl-global-leaf-rain" aria-hidden="true">
@@ -1752,7 +1759,8 @@
                     });
                     if (serverData.urlLkpd) state.student.answers[`${actId}_lkpd_url`] = serverData.urlLkpd;
                     if (serverData.urlDokumentasi) state.student.answers[`${actId}_photo_url`] = serverData.urlDokumentasi;
-                    state.student.progress[actId] = String(serverData.statusAksi || '').toLowerCase() === 'selesai';
+                    state.student.progress[actId] = state.student.progress[actId] === true ||
+                        String(serverData.statusAksi || '').toLowerCase() === 'selesai';
                 }
                 // Draf lokal selalu di-merge terakhir agar ketikan paling baru tidak tertimpa server.
                 if (localDraft?.answers) Object.assign(state.student.answers, sanitizeStudentPromptAnswers(localDraft.answers, actId));
@@ -1900,8 +1908,12 @@
             }
         }
 
-        // Batas waktu untuk mencegah spinner berjalan tanpa henti saat GAS lambat.
-        const API_TIMEOUT_MS = 8000;
+        // Timeout adaptif: Google Apps Script dapat membutuhkan waktu lebih dari 8 detik,
+        // terutama saat autosave, pembacaan data, atau ketika beberapa murid mengakses portal.
+        const API_TIMEOUT_MS = 30000; // default 30 detik
+        const API_READ_TIMEOUT_MS = 30000;
+        const API_WRITE_TIMEOUT_MS = 45000;
+        const API_UPLOAD_TIMEOUT_MS = 90000;
         const API_SESSION_CACHE_TTL_MS = 5 * 60 * 1000;
         let activeApiRequests = 0;
 
@@ -1974,10 +1986,16 @@
                 };
                 if (controller) requestOptions.signal = controller.signal;
 
-                const requestTimeoutMs = action === 'uploadStudentFile' ? 60000 : API_TIMEOUT_MS;
+                const isUploadAction = ['uploadStudentFile', 'uploadFileToDrive', 'uploadGuideResource'].includes(action);
+                const isWriteAction = API_SESSION_MUTATING_ACTIONS.has(action);
+                const requestTimeoutMs = isUploadAction
+                    ? API_UPLOAD_TIMEOUT_MS
+                    : (isWriteAction ? API_WRITE_TIMEOUT_MS : API_READ_TIMEOUT_MS);
                 const timeoutPromise = new Promise((_, reject) => {
                     timeoutId = setTimeout(() => {
-                        if (controller) controller.abort();
+                        // Jangan membatalkan request mutasi di browser: Apps Script mungkin masih
+                        // menyelesaikan penulisan. Hentikan penantian UI saja agar hasilnya tidak ambigu.
+                        if (controller && !isWriteAction) controller.abort();
                         const timeoutError = new Error(`Permintaan melewati batas waktu ${Math.round(requestTimeoutMs / 1000)} detik.`);
                         timeoutError.name = 'TimeoutError';
                         reject(timeoutError);
@@ -2009,12 +2027,17 @@
                 return result;
             } catch (err) {
                 const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
+                const timeoutSeconds = action === 'uploadStudentFile' || action === 'uploadFileToDrive' || action === 'uploadGuideResource'
+                    ? API_UPLOAD_TIMEOUT_MS / 1000
+                    : (API_SESSION_MUTATING_ACTIONS.has(action) ? API_WRITE_TIMEOUT_MS / 1000 : API_READ_TIMEOUT_MS / 1000);
                 const message = timedOut
-                    ? `Koneksi ke server terlalu lama (batas ${Math.round(API_TIMEOUT_MS / 1000)} detik). Draft isian tetap tersimpan di perangkat ini. Silakan coba lagi.`
+                    ? `Koneksi ke server belum merespons dalam ${timeoutSeconds} detik. Draft tetap tersimpan di perangkat ini. Sinkronisasi dapat dicoba kembali.`
                     : (err && err.message ? err.message : 'Koneksi ke server gagal. Periksa jaringan internet Anda.');
                 console.error(`API Error [${action}]:`, err);
-                if (timedOut) {
-                    try { showModal('Permintaan Terlalu Lama', message, 'error'); } catch (modalError) { console.warn('Pesan timeout tidak dapat ditampilkan:', modalError); }
+                // Autosave draf berjalan di latar belakang; jangan mengganggu murid dengan modal.
+                const isBackgroundDraftSave = action === 'saveStudentActivity' && String(payload.statusAksi || '').toLowerCase() === 'draf';
+                if (timedOut && !isBackgroundDraftSave) {
+                    try { showModal('Koneksi Server Lambat', message, 'error'); } catch (modalError) { console.warn('Pesan timeout tidak dapat ditampilkan:', modalError); }
                 }
                 return { status: 'error', success: false, fallback: true, action, message };
             } finally {
@@ -2112,20 +2135,16 @@
             }
         }
         async function sendStudentActivityAnswers(actId) {
-            try {
-                const submittedAnswers = JSON.parse(JSON.stringify(state.student.answers || {}));
-                await saveStudentActivityServer(actId, 'draf');
-                clearActivityDraftLocal(actId, state.student.nisn);
-                clearStudentDraftIfUnchanged(state.student.nisn, submittedAnswers, actId);
-                setStudentDraftIndicator(actId, '✓ Jawaban berhasil dikirim dan tersimpan di server', 'saved');
-                showModal('Jawaban Terkirim', 'Jawabanmu sudah tersimpan ke Google Sheets. Untuk menandai aktivitas selesai, tekan tombol Selesaikan Aktivitas.', 'success');
-            } catch (err) {
-                setStudentDraftIndicator(actId, '⚠ Jawaban belum terkonfirmasi server; draf lokal tetap aman', 'error');
-                showModal('Pengiriman Gagal', escapeHTML(err.message || 'Jawaban belum berhasil disimpan.'), 'error');
-            }
+            // Kompatibilitas untuk pemanggilan lama: kirim tugas sekarang berarti
+            // menyimpan seluruh bukti, menandai aktivitas selesai, dan memberi 1 bintang.
+            return submitStudentActivity(actId);
         }
 
+        const studentActivitySubmitInFlight = new Set();
         async function submitStudentActivity(actId) {
+            if (!/^act[1-5]$/.test(actId) || studentActivitySubmitInFlight.has(actId)) return;
+            studentActivitySubmitInFlight.add(actId);
+            const alreadyCompleted = state.student.progress[actId] === true;
             const answers = state.student.answers || {};
             let missingFields = [];
 
@@ -2150,18 +2169,12 @@
 
             if (missingFields.length > 0) {
                 const listHTML = `<ul class="text-left text-xs list-disc list-inside font-bold text-rose-600 space-y-1.5 my-2 bg-rose-50 p-3 rounded-2xl border border-rose-200">${missingFields.map(f => `<li>${f}</li>`).join('')}</ul>`;
-                showModal('Form Belum Lengkap! ⚠️', `Mohon lengkapi seluruh isian/bukti di bawah ini sebelum menyimpan:<br>${listHTML}`, 'warning');
+                showModal('Form Belum Lengkap! ⚠️', `Mohon lengkapi seluruh isian/bukti di bawah ini sebelum mengirim tugas:<br>${listHTML}`, 'warning');
+                studentActivitySubmitInFlight.delete(actId);
                 return;
             }
 
-            state.student.progress[actId] = true;
-
             const currentStudentObj = studentMasterDB.find(s => s.nama === state.student.name || s.nisn === state.student.nisn);
-            if (currentStudentObj) {
-                if (!currentStudentObj.progress) currentStudentObj.progress = {};
-                currentStudentObj.progress[actId] = true;
-            }
-
             const submittedAnswers = JSON.parse(JSON.stringify(state.student.answers || {}));
             let uploads = {};
             try {
@@ -2179,30 +2192,38 @@
                     }
                 }
             } catch (uploadError) {
-                state.student.progress[actId] = false;
                 persistStudentDraft();
                 setStudentDraftIndicator(actId, '⚠ Unggah gagal. Draf jawaban tetap tersimpan di perangkat ini; coba unggah kembali.', 'error');
                 showModal('Unggah Belum Berhasil', escapeHTML(uploadError.message || 'Berkas belum berhasil diunggah. Periksa koneksi dan coba lagi.'), 'error');
+                studentActivitySubmitInFlight.delete(actId);
                 return;
             }
 
             const payload = { nisn: state.student.nisn, act_id: actId, answers: submittedAnswers, uploads, status_misi: 'selesai' };
             const saveResult = await apiCall('saveStudentSubmission', payload);
             if (!saveResult || saveResult.status !== 'success') {
-                state.student.progress[actId] = false;
                 persistStudentDraft();
                 showModal('Belum Tersimpan ⚠️', escapeHTML(saveResult?.message || 'Data belum berhasil dikirim ke server. Draft tetap tersimpan di perangkat ini.'), 'error');
+                studentActivitySubmitInFlight.delete(actId);
                 return;
+            }
+            // STUDENT_SUBMISSIONS is the teacher-monitoring source of truth.
+            // Once this write succeeds, the activity is completed even if the secondary
+            // portfolio detail record needs a retry.
+            state.student.progress[actId] = true;
+            if (currentStudentObj) {
+                if (!currentStudentObj.progress) currentStudentObj.progress = {};
+                currentStudentObj.progress[actId] = true;
             }
             try {
                 Object.assign(state.student.answers, submittedAnswers);
                 const activityRecordResult = await saveStudentActivityServer(actId, 'selesai');
                 if (!activityRecordResult || activityRecordResult.status !== 'success') throw new Error(activityRecordResult?.message || 'Record Jawaban Murid belum tersimpan.');
             } catch (recordError) {
-                state.student.progress[actId] = false;
                 persistStudentDraft();
-                setStudentDraftIndicator(actId, '⚠ Data utama tersimpan, tetapi record Jawaban Murid belum terkonfirmasi. Draf dipertahankan.', 'error');
+                setStudentDraftIndicator(actId, '⚠ Tugas sudah terkirim kepada guru. Sinkronisasi detail portofolio perlu dicoba kembali.', 'error');
                 showModal('Penyimpanan Belum Lengkap', escapeHTML(recordError.message || 'Data aktivitas belum lengkap tersimpan.'), 'error');
+                studentActivitySubmitInFlight.delete(actId);
                 return;
             }
             const activityDraftCleared = clearStudentDraftIfUnchanged(state.student.nisn, submittedAnswers, actId);
@@ -2210,17 +2231,18 @@
             delete studentSelectedFiles[`${actId}_lkpd`];
             delete studentSelectedFiles[`${actId}_photo`];
 
-            let stars = "⭐";
-            if(actId==='act2') stars="⭐⭐";
-            if(actId==='act3') stars="⭐⭐⭐";
-            if(actId==='act4') stars="⭐⭐⭐⭐";
-            if(actId==='act5') stars="⭐⭐⭐⭐⭐";
-
+            const totalStars = Number.isFinite(Number(saveResult.completed_activities)) ? Number(saveResult.completed_activities) : ['act1','act2','act3','act4','act5'].filter(id => state.student.progress[id] === true).length;
+            const newlyCompleted = typeof saveResult.newly_completed === 'boolean' ? saveResult.newly_completed : !alreadyCompleted;
             setStudentDraftIndicator(actId, activityDraftCleared
-                ? '✓ Tugas tersimpan resmi ke Google Sheets. Draf aktivitas ini telah dibersihkan.'
-                : '✓ Tugas tersimpan resmi. Ketikan terbaru yang dibuat saat proses simpan tetap dipertahankan sebagai draf.', 'saved');
-            showModal('Aktivitas Selesai! 🎉', `Selamat! Kamu mendapatkan reward Bintang ${stars}. Seluruh bukti belajarmu berhasil tersimpan! Klik tombol <strong>Selanjutnya</strong> untuk berpindah ke tahap berikutnya.`, 'success');
+                ? '✓ Tugas berhasil dikirim ke guru. Draf aktivitas ini telah dibersihkan.'
+                : '✓ Tugas berhasil dikirim. Isian terbaru tetap dipertahankan sebagai draf.', 'saved');
+            if (newlyCompleted) {
+                showModal('Aktivitas Selesai! 🎉', `Hebat! Kamu berhasil menyelesaikan Aktivitas ${actId.replace('act','')} dan mendapatkan <strong>1 Bintang ⭐</strong>!<br><br>Total bintangmu sekarang: <strong>${totalStars} dari 5 ⭐</strong>. Tugasmu sudah terkirim dan dapat diperiksa guru.`, 'success');
+            } else {
+                showModal('Tugas Berhasil Diperbarui! ✓', `Perubahan tugas Aktivitas ${actId.replace('act','')} berhasil dikirim kepada guru. Bintang aktivitas ini tetap dihitung satu kali.<br><br>Total bintangmu: <strong>${totalStars} dari 5 ⭐</strong>.`, 'success');
+            }
 
+            studentActivitySubmitInFlight.delete(actId);
             renderStudentBoard();
         }
 
@@ -2642,7 +2664,7 @@
 
             if (currentId.startsWith('act')) {
                 if (!state.student.progress[currentId]) {
-                    showModal('Aktivitas Belum Diselesaikan ⚠️', `Mohon isi seluruh jawaban/bukti dan klik tombol <strong>Simpan ${getSectionTitle(currentId)}</strong> terlebih dahulu!`, 'warning');
+                    showModal('Aktivitas Belum Diselesaikan ⚠️', `Selesaikan pengisian, lalu klik tombol <strong>Kirim Tugas</strong> sebelum melanjutkan ke aktivitas berikutnya!`, 'warning');
                     return;
                 }
             }
@@ -3099,12 +3121,8 @@
             if(!container) return;
 
             const actCompletedCount = ['act1','act2','act3','act4','act5'].filter(id => state.student.progress[id]).length;
-            let starCount = 0;
-            if(state.student.progress.act1) starCount = 1;
-            if(state.student.progress.act2) starCount = 2;
-            if(state.student.progress.act3) starCount = 3;
-            if(state.student.progress.act4) starCount = 4;
-            if(state.student.progress.act5) starCount = 5;
+            const starCount = ['act1','act2','act3','act4','act5']
+                .filter(id => state.student.progress[id] === true).length;
 
             const sec = state.student.currentSection;
 
@@ -3285,7 +3303,7 @@
                                 </div>
                                 <h3 class="font-black text-sm text-slate-800 mb-1.5">Kumpulkan Reward Bintang Aktivitas 1–5</h3>
                                 <p class="text-xs text-slate-500 font-bold leading-relaxed">
-                                    Selesaikan Aktivitas 1 hingga 5 untuk meraih total 5 Bintang Progres.
+                                    Kirim tugas pada setiap Aktivitas 1–5 untuk mengumpulkan maksimal 5 bintang.
                                 </p>
                             </div>
                         </div>
@@ -3360,7 +3378,7 @@
                             <span class="w-14 h-14 rounded-2xl bg-sky-100 text-blue-700 flex items-center justify-center text-2xl shrink-0"><i class="fa-solid fa-list-check"></i></span><span class="min-w-0 flex-1"><span class="block text-xs font-black text-sky-800">Progres Kegiatan</span><strong class="block text-xl font-black text-blue-950">${actCompletedCount} dari 5</strong><span class="block text-xs text-slate-600">Aktivitas selesai</span><span class="mt-2 block h-2 rounded-full bg-sky-100 overflow-hidden"><span class="block h-full rounded-full bg-emerald-500" style="width:${progressPct}%"></span></span></span><b class="text-blue-800">${progressPct}%</b>
                         </button>
                         <button onclick="changeStudentSection('pencapaianku')" class="text-left rounded-2xl border border-amber-100 bg-gradient-to-br from-white to-amber-50 p-4 flex items-center gap-3 shadow-sm hover:shadow-md transition">
-                            <span class="w-14 h-14 rounded-2xl bg-amber-100 text-amber-500 flex items-center justify-center text-3xl shrink-0"><i class="fa-solid fa-star"></i></span><span><span class="block text-xs font-black text-amber-900">Bintang Progres</span><strong class="block text-2xl font-black text-slate-900">${starCount}</strong><span class="block text-xs text-slate-600">dari 5 bintang</span><span class="block text-[10px] text-amber-800 mt-1">Selesaikan Aktivitas 1–5</span></span>
+                            <span class="w-14 h-14 rounded-2xl bg-amber-100 text-amber-500 flex items-center justify-center text-3xl shrink-0"><i class="fa-solid fa-star"></i></span><span><span class="block text-xs font-black text-amber-900">Bintang Progres</span><strong class="block text-2xl font-black text-slate-900">${starCount}</strong><span class="block text-xs text-slate-600">dari 5 bintang</span><span class="block text-[10px] text-amber-800 mt-1">Kirim Tugas pada Aktivitas 1–5</span></span>
                         </button>
                         <button onclick="changeStudentSection('refleksi_akhir')" class="text-left rounded-2xl border border-green-100 bg-gradient-to-br from-white to-green-50 p-4 flex items-center gap-3 shadow-sm hover:shadow-md transition">
                             <span class="w-14 h-14 rounded-2xl bg-green-100 text-green-700 flex items-center justify-center text-2xl shrink-0"><i class="fa-solid fa-seedling"></i></span><span><span class="block text-xs font-black text-green-800">Kebiasaan Baik</span><strong class="block text-xl font-black text-blue-950">${state.student.progress.refleksi_akhir?'Tercatat':'Ayo Mulai'}</strong><span class="block text-xs text-slate-600">Rencanakan aksi ramah lingkungan</span></span>
@@ -3882,9 +3900,6 @@ function renderStudentActivityForm(actId) {
                     ${cfg.peer.length ? `<section id="act1-peer" class="scroll-mt-4 rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm"><h3 class="mb-3 text-lg font-black text-indigo-950"><i class="fa-solid fa-users mr-2"></i>Penilaian Teman Sebaya</h3>${renderStudentAPKAssessment(actId,'peer',cfg.peer)}</section>` : ''}
                     
                     <section id="act1-refleksi" class="scroll-mt-4 rounded-2xl border border-violet-100 bg-white p-4 shadow-sm"><h3 class="mb-3 text-lg font-black text-violet-950"><i class="fa-solid fa-comments mr-2"></i>Refleksi</h3><div class="grid grid-cols-1 gap-3 md:grid-cols-3">${reflection('refleksi_baik','Hal yang sudah saya lakukan dengan baik','Tuliskan hal yang sudah kamu lakukan dengan baik...')}${reflection('refleksi_perbaiki','Hal yang masih perlu saya perbaiki','Tuliskan hal yang masih perlu kamu perbaiki...')}${reflection('kebiasaan_lanjut','Kebiasaan baik yang akan saya lakukan','Tuliskan kebiasaan baik yang akan kamu lakukan...')}</div></section>
-                    <div class="activity-completion-actions flex flex-col items-center gap-3 py-2">
-                      <button onclick="submitStudentActivity('${actId}')" class="rounded-2xl bg-emerald-600 px-8 py-3.5 text-base font-black text-white shadow-md hover:bg-emerald-700"><i class="fa-solid fa-check mr-2"></i>Selesaikan Aktivitas 1</button>
-                    </div>
                     ${renderNavigationButtons(actId)}
                 </div>`;
             }
@@ -3912,10 +3927,6 @@ function renderStudentActivityForm(actId) {
                     ${cfg.peer.length ? renderStudentAPKAssessment(actId,'peer',cfg.peer) : ''}
                     ${renderStudentAPKAssessment(actId,'self',cfg.self)}
                     <section class="activity-step-card" style="background:linear-gradient(110deg,#fff1f2,#ffffff);border-color:#fecdd3"><div class="flex h-12 w-12 items-center justify-center rounded-full bg-rose-500 text-white text-xl font-black">${actId === 'act4' ? 5 : actId === 'act5' ? 4 : 4}</div><div class="flex h-14 w-14 items-center justify-center text-5xl text-rose-500"><i class="fa-solid fa-heart"></i></div><div class="min-w-0 space-y-4 w-full"><div><h3 class="text-xl font-black text-slate-950">Refleksi Singkat</h3><p class="mt-1 text-sm text-slate-700">Jawablah dengan jujur berdasarkan pengalamanmu dalam kegiatan ini.</p></div>${reflection('refleksi_baik','Hal yang sudah saya lakukan dengan baik','Tuliskan hal yang sudah kamu lakukan dengan baik...')}${reflection('refleksi_perbaiki','Hal yang masih perlu saya perbaiki','Tuliskan hal yang masih perlu kamu perbaiki...')}${reflection('kebiasaan_lanjut','Kebiasaan baik yang akan saya lakukan setelah kegiatan ini','Tuliskan kebiasaan baik yang akan kamu lakukan...')}</div></section>
-                </div>
-                <div class="activity-completion-actions flex flex-col items-center justify-center gap-3 py-2">
-                  <button onclick="submitStudentActivity('${actId}')" class="bg-emerald-600 hover:bg-emerald-700 text-white font-black py-3.5 px-8 rounded-2xl text-base shadow-md"><i class="fa-solid fa-check mr-2"></i>Selesaikan Aktivitas ${cfg.number}</button>
-                  ${actId === 'act5' ? `<button onclick="submitAllStudentTasks()" class="bg-blue-600 hover:bg-blue-700 text-white font-black py-3.5 px-8 rounded-2xl text-base shadow-md"><i class="fa-solid fa-paper-plane mr-2"></i>Kirim Semua Tugas</button>` : ''}
                 </div>
                 ${renderNavigationButtons(actId)}
             </div>`;
@@ -3986,56 +3997,6 @@ function renderStudentActivityForm(actId) {
             renderStudentBoard();
         }
 
-        async function submitAllStudentTasks() {
-            const actIds = ['act1', 'act2', 'act3', 'act4', 'act5'];
-            const notDone = actIds.filter(id => !state.student.progress[id]);
-            if (notDone.length) {
-                const names = notDone.map(id => getSectionTitle(id)).join(', ');
-                showModal(
-                    'Tugas Belum Lengkap ⚠️',
-                    `Selesaikan dan simpan seluruh Aktivitas 1–5 terlebih dahulu. Aktivitas yang belum selesai: <strong>${escapeHTML(names)}</strong>.`,
-                    'warning'
-                );
-                return;
-            }
-
-            const confirmed = window.confirm('Apakah kamu yakin ingin mengirim seluruh tugas Aktivitas 1–5 kepada guru? Pastikan semua jawaban dan bukti belajar sudah benar.');
-            if (!confirmed) return;
-
-            // Each activity is already saved to the backend when the student clicks
-            // "Selesaikan Aktivitas". This final action re-sends the saved activity
-            // payloads using the existing saveStudentSubmission endpoint for consistency.
-            for (const actId of actIds) {
-                const answers = JSON.parse(JSON.stringify(state.student.answers || {}));
-                const uploads = {};
-                for (const kind of ['lkpd', 'photo']) {
-                    const url = answers[`${actId}_${kind}_url`];
-                    if (url) uploads[kind] = { url, fileName: answers[`${actId}_${kind}_filename`] || '' };
-                }
-                const result = await apiCall('saveStudentSubmission', {
-                    nisn: state.student.nisn,
-                    act_id: actId,
-                    answers,
-                    uploads,
-                    status_misi: 'selesai',
-                    final_submission: true
-                });
-                if (!result || result.status !== 'success') {
-                    showModal(
-                        'Pengiriman Belum Berhasil',
-                        `Tugas ${escapeHTML(getSectionTitle(actId))} belum berhasil dikonfirmasi ke server. Silakan coba kembali.`,
-                        'error'
-                    );
-                    return;
-                }
-            }
-
-            showModal(
-                'Semua Tugas Terkirim! 🎉',
-                'Seluruh tugas Aktivitas 1–5 sudah dikirim melalui server PORTAL-SRL. Guru dapat memeriksa hasil sesuai data yang diterima.',
-                'success'
-            );
-        }
 
         const activityLearningGuide = {
             act1: {
@@ -4208,7 +4169,7 @@ function renderStudentActivityForm(actId) {
                     if (oldPromptEnd >= 0) remainingForm = remainingForm.slice(0, oldPromptStart) + remainingForm.slice(oldPromptEnd + '</section>'.length);
                 }
             }
-            const draftActions = `<div class="flex flex-wrap justify-center gap-2 py-2"><button type="button" onclick="saveStudentActivityDraft('${actId}')" class="rounded-xl border border-sky-300 bg-white px-5 py-3 text-sm font-black text-sky-800"><i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Draf</button><button type="button" onclick="sendStudentActivityAnswers('${actId}')" class="rounded-xl border border-emerald-300 bg-emerald-50 px-5 py-3 text-sm font-black text-emerald-800"><i class="fa-solid fa-paper-plane mr-2"></i>Kirim Jawaban</button></div>`;
+            const draftActions = `<div class="activity-submit-layout"><div class="activity-primary-actions"><button type="button" onclick="saveStudentActivityDraft('${actId}')" class="rounded-2xl border border-sky-300 bg-white px-6 py-3 text-sm font-black text-sky-800 shadow-sm"><i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Draft</button><button type="button" onclick="submitStudentActivity('${actId}')" class="rounded-2xl border border-emerald-300 bg-emerald-50 px-6 py-3 text-sm font-black text-emerald-800 shadow-sm"><i class="fa-solid fa-paper-plane mr-2"></i>Kirim Tugas</button></div></div>`;
             return `<div class="space-y-4 student-activity-draft-scope" data-activity-id="${actId}">${hero}<div id="student-draft-status-${actId}" class="student-draft-status text-xs font-semibold rounded-lg px-3 py-2 mb-2 bg-emerald-50 text-emerald-700 border border-emerald-100" role="status">✓ Draf otomatis tersimpan di perangkat ini</div>${guidePanel}${remainingForm}${draftActions}</div>`;
         }
 
