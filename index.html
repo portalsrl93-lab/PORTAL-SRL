@@ -5705,7 +5705,23 @@ function renderStudentActivityForm(actId) {
   overflow: visible !important;
 }
 </style>
-\n</body></html>`;
+\n
+<style id="portal-srl-final-centered-action-gap">
+.activity-primary-actions{
+  display:flex!important;
+  flex-direction:row!important;
+  justify-content:center!important;
+  align-items:center!important;
+  flex-wrap:nowrap!important;
+  gap:26px!important;
+  width:100%!important;
+}
+@media(max-width:480px){
+  .activity-primary-actions{gap:16px!important}
+}
+</style>
+
+</body></html>`;
             const win = window.open('', '_blank');
             if (!win) { showModal('Jendela Laporan Diblokir', 'Izinkan pop-up untuk PORTAL-SRL, lalu tekan tombol Unduh Laporan Murid kembali.', 'warning'); return; }
             win.document.open(); win.document.write(doc); win.document.close();
@@ -7017,5 +7033,21 @@ function renderStudentActivityForm(actId) {
         // Notifikasi dapat ditambahkan dari modul lain, misalnya: addPortalNotification({title:'Bukti karya baru',message:'Murid mengunggah foto aktivitas.',category:'Bukti Karya',target:'bukti_karya'}).
 
 </script>
+
+<style id="portal-srl-final-centered-action-gap">
+.activity-primary-actions{
+  display:flex!important;
+  flex-direction:row!important;
+  justify-content:center!important;
+  align-items:center!important;
+  flex-wrap:nowrap!important;
+  gap:26px!important;
+  width:100%!important;
+}
+@media(max-width:480px){
+  .activity-primary-actions{gap:16px!important}
+}
+</style>
+
 </body>
 </html>
