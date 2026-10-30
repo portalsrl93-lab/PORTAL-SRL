@@ -786,6 +786,40 @@
 @media(max-width:760px){.student-activity-shell .activity-primary-actions button{width:100%;min-width:0}}
 </style>
 
+
+<style id="portal-srl-activity-action-position-final">
+.student-activity-shell .activity-submit-layout{
+  display:flex!important;flex-direction:column!important;align-items:stretch!important;
+  width:100%!important;gap:10px!important;margin:10px 0 0!important;padding:12px 0 0!important;
+}
+.student-activity-shell .activity-primary-actions{
+  display:flex!important;flex-direction:row!important;justify-content:center!important;
+  align-items:center!important;flex-wrap:nowrap!important;gap:12px!important;width:100%!important;
+}
+.student-activity-shell .activity-primary-actions button{
+  flex:0 1 230px!important;width:auto!important;min-width:0!important;max-width:260px!important;
+}
+.student-activity-shell .activity-navigation-actions{
+  display:flex!important;flex-direction:row!important;justify-content:space-between!important;
+  align-items:center!important;gap:12px!important;width:100%!important;
+  margin-top:0!important;padding-top:16px!important;
+}
+.student-activity-shell .activity-navigation-actions button{
+  flex:0 1 220px!important;width:auto!important;min-width:0!important;max-width:48%!important;
+}
+@media(max-width:480px){
+  .student-activity-shell .activity-primary-actions{gap:8px!important}
+  .student-activity-shell .activity-primary-actions button{
+    flex:1 1 0!important;max-width:none!important;padding:11px 8px!important;
+    font-size:11px!important;white-space:nowrap!important;
+  }
+  .student-activity-shell .activity-navigation-actions{gap:8px!important}
+  .student-activity-shell .activity-navigation-actions button{
+    flex:1 1 0!important;max-width:48%!important;padding:11px 8px!important;font-size:12px!important;
+  }
+}
+</style>
+
 </head>
 <body class="overflow-x-hidden min-h-screen bg-[#f4f9f1]">
 <div id="srl-global-leaf-rain" aria-hidden="true">
@@ -2638,7 +2672,7 @@
             }
 
             return `
-                <div class="pt-6 border-t border-dashed border-slate-200 flex flex-col sm:flex-row gap-3 w-full">
+                <div class="activity-navigation-actions pt-6 border-t border-dashed border-slate-200 flex flex-row items-center justify-between gap-3 w-full">
                     ${prevBtnHTML}
                     ${nextBtnHTML}
                 </div>
@@ -4169,8 +4203,33 @@ function renderStudentActivityForm(actId) {
                     if (oldPromptEnd >= 0) remainingForm = remainingForm.slice(0, oldPromptStart) + remainingForm.slice(oldPromptEnd + '</section>'.length);
                 }
             }
+            // Pisahkan navigasi yang sudah ada dari form, lalu tempatkan tombol tindakan
+            // tepat di atas navigasi. Struktur dan handler Sebelumnya/Selanjutnya tetap utuh.
+            let navigationHTML = '';
+            const navMarker = 'activity-navigation-actions';
+            const navMarkerIndex = remainingForm.lastIndexOf(navMarker);
+            if (navMarkerIndex >= 0) {
+                const navOpenStart = remainingForm.lastIndexOf('<div', navMarkerIndex);
+                if (navOpenStart >= 0) {
+                    let scan = navOpenStart;
+                    let depth = 0;
+                    let navEnd = -1;
+                    const tagPattern = /<div\b[^>]*>|<\/div\s*>/gi;
+                    tagPattern.lastIndex = navOpenStart;
+                    let tagMatch;
+                    while ((tagMatch = tagPattern.exec(remainingForm))) {
+                        if (/^<div\b/i.test(tagMatch[0])) depth++;
+                        else depth--;
+                        if (depth === 0) { navEnd = tagPattern.lastIndex; break; }
+                    }
+                    if (navEnd > navOpenStart) {
+                        navigationHTML = remainingForm.slice(navOpenStart, navEnd);
+                        remainingForm = remainingForm.slice(0, navOpenStart) + remainingForm.slice(navEnd);
+                    }
+                }
+            }
             const draftActions = `<div class="activity-submit-layout"><div class="activity-primary-actions"><button type="button" onclick="saveStudentActivityDraft('${actId}')" class="rounded-2xl border border-sky-300 bg-white px-6 py-3 text-sm font-black text-sky-800 shadow-sm"><i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Draft</button><button type="button" onclick="submitStudentActivity('${actId}')" class="rounded-2xl border border-emerald-300 bg-emerald-50 px-6 py-3 text-sm font-black text-emerald-800 shadow-sm"><i class="fa-solid fa-paper-plane mr-2"></i>Kirim Tugas</button></div></div>`;
-            return `<div class="space-y-4 student-activity-draft-scope" data-activity-id="${actId}">${hero}<div id="student-draft-status-${actId}" class="student-draft-status text-xs font-semibold rounded-lg px-3 py-2 mb-2 bg-emerald-50 text-emerald-700 border border-emerald-100" role="status">✓ Draf otomatis tersimpan di perangkat ini</div>${guidePanel}${remainingForm}${draftActions}</div>`;
+            return `<div class="space-y-4 student-activity-draft-scope" data-activity-id="${actId}">${hero}<div id="student-draft-status-${actId}" class="student-draft-status text-xs font-semibold rounded-lg px-3 py-2 mb-2 bg-emerald-50 text-emerald-700 border border-emerald-100" role="status">✓ Draf otomatis tersimpan di perangkat ini</div>${guidePanel}${remainingForm}${draftActions}${navigationHTML}</div>`;
         }
 
         function openRoomReading(index) {
