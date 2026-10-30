@@ -5470,30 +5470,42 @@ function renderStudentActivityForm(actId) {
           else panel=`<div class="grid gap-4 lg:grid-cols-2"><section class="rounded-2xl border bg-white p-4"><h3 class="font-black">Keamanan Akun</h3><div class="mt-4 grid gap-3"><label class="block text-[11px] font-bold">Password Baru<input id="settings-new-password" type="password" autocomplete="new-password" placeholder="Minimal 8 karakter" class="mt-1 w-full rounded-lg border p-3 text-xs"></label><label class="block text-[11px] font-bold">Konfirmasi Password<input id="settings-confirm-password" type="password" autocomplete="new-password" placeholder="Ulangi password" class="mt-1 w-full rounded-lg border p-3 text-xs"></label><button onclick="changeTeacherPassword()" class="rounded-xl bg-sky-600 px-4 py-3 text-xs font-bold text-white">Validasi Perubahan Password</button><p class="text-[10px] text-slate-500">Penggantian kredensial sesungguhnya memerlukan backend autentikasi.</p></div></section><section class="rounded-2xl border bg-white p-4"><h3 class="font-black">Akses & Log Aktivitas</h3><p class="mt-3 text-xs leading-relaxed text-slate-600">Guru mengelola instrumen dan asesmen. Siswa mengerjakan aktivitas dan mengumpulkan bukti. Orang tua mendukung pemantauan. Riwayat akses terperinci memerlukan pencatatan audit pada backend.</p><button onclick="showModal('Log Aktivitas','Riwayat akses terperinci perlu dicatat pada backend.','info')" class="mt-4 w-full rounded-xl border px-4 py-3 text-xs font-bold">Lihat Keterangan Log Aktivitas</button></section></div>`;
           return `<div class="space-y-4">${teacherPortfolioBanner('KONFIGURASI PORTAL','Pengaturan','Atur data sekolah, pengguna, kelas, aktivitas, instrumen asesmen, tampilan, dan keamanan PORTAL-SRL.','fa-gear',['Konfigurasi Sekolah','Instrumen APK','Akses Pengguna'])}<section class="rounded-2xl border border-slate-100 bg-white p-3 md:p-4"><div class="flex flex-wrap items-center justify-between gap-3"><div class="flex items-center gap-3"><span class="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-600 text-xl text-white"><i class="fa-solid fa-sliders"></i></span><div><h2 class="font-kids text-xl font-black">Pengaturan</h2><p class="text-xs text-slate-500">Kelola data dan fitur PORTAL-SRL sesuai kebutuhan sekolah.</p></div></div><button onclick="saveTeacherSettingsPage()" class="rounded-xl bg-sky-600 px-4 py-3 text-xs font-black text-white"><i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Semua Perubahan</button></div><nav class="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-7">${tabHtml}</nav><div class="mt-4">${panel}</div></section></div>`;
         }
-        function saveRoomLearningEditor() {
+        async function saveRoomLearningEditor() {
             const readings = [];
             const videos = [];
             const videoPublished = [];
-            for (let i=0;i<5;i++) {
-                readings.push({
-                    title: document.getElementById(`room-edit-title-${i}`)?.value || '',
-                    subtitle: document.getElementById(`room-edit-subtitle-${i}`)?.value || '',
-                    body: document.getElementById(`room-edit-body-${i}`)?.value || '',
-                    published: !!document.getElementById(`room-edit-published-${i}`)?.checked
+            const saveButton = document.querySelector('button[onclick="saveRoomLearningEditor()"]');
+            if (saveButton) { saveButton.disabled = true; saveButton.classList.add('opacity-60', 'cursor-not-allowed'); }
+            try {
+                for (let i=0;i<5;i++) {
+                    readings.push({
+                        title: document.getElementById(`room-edit-title-${i}`)?.value || '',
+                        subtitle: document.getElementById(`room-edit-subtitle-${i}`)?.value || '',
+                        body: document.getElementById(`room-edit-body-${i}`)?.value || '',
+                        published: !!document.getElementById(`room-edit-published-${i}`)?.checked
+                    });
+                    videos.push(document.getElementById(`room-edit-video-${i}`)?.value || '');
+                    videoPublished.push(!!document.getElementById(`room-edit-video-published-${i}`)?.checked);
+                }
+                const res = await apiCall('saveRoomLearningContent', {
+                    roomReadings: readings,
+                    roomVideos: videos,
+                    roomVideoPublished: videoPublished
                 });
-                videos.push(document.getElementById(`room-edit-video-${i}`)?.value || '');
-                videoPublished.push(!!document.getElementById(`room-edit-video-published-${i}`)?.checked);
-            }
-            apiCall('saveRoomLearningContent',{roomReadings:readings,roomVideos:videos,roomVideoPublished:videoPublished}).then(res=>{
-                if(!res || res.status!=='success') { showModal('Gagal Menyimpan Ruang Belajar',(res&&res.message)||'Periksa koneksi dan sesi guru.','error'); return; }
-                state.teacherSettings.roomReadings=res.roomReadings;
-                state.teacherSettings.roomVideos=res.roomVideos;
-                state.teacherSettings.roomVideoPublished=res.roomVideoPublished;
-                showModal('Ruang Belajar Tersimpan','Materi bacaan dan tautan video telah disimpan ke Google Sheets. Murid akan melihat konten yang berstatus dipublikasikan.','success');
+                if (!res || res.status !== 'success') {
+                    throw new Error((res && res.message) || 'Periksa koneksi dan sesi guru.');
+                }
+                state.teacherSettings.roomReadings = Array.isArray(res.roomReadings) ? res.roomReadings : readings;
+                state.teacherSettings.roomVideos = Array.isArray(res.roomVideos) ? res.roomVideos : videos;
+                state.teacherSettings.roomVideoPublished = Array.isArray(res.roomVideoPublished) ? res.roomVideoPublished : videoPublished;
+                showModal('Ruang Belajar Tersimpan', 'Materi dan tautan video berhasil disimpan. URL video yang kolomnya tidak diubah tetap dipertahankan. Murid dapat melihat video yang dipublikasikan.', 'success');
                 renderTeacherBoard();
-            }).catch(err=>showModal('Gagal Menyimpan Ruang Belajar',err?.message||'Periksa koneksi dan deployment Apps Script.','error'));
+            } catch (err) {
+                showModal('Gagal Menyimpan Ruang Belajar', err && err.message ? err.message : 'Periksa koneksi dan deployment Apps Script.', 'error');
+            } finally {
+                if (saveButton) { saveButton.disabled = false; saveButton.classList.remove('opacity-60', 'cursor-not-allowed'); }
+            }
         }
-
         function renderTeacherRoomLearningEditor() {
             const defaults = [
               ['Aktivitas 1 · Ayo, Kenali Jenis-Jenis Sampah!','Mengenali sampah di sekitar kita'],
@@ -6451,8 +6463,9 @@ function renderStudentActivityForm(actId) {
                     <div class="mb-4 flex items-center gap-3"><span class="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-100 text-rose-600"><i class="fa-brands fa-youtube text-xl"></i></span><div><h2 class="font-black text-base text-rose-950">Editor Video Stimulasi</h2><p class="mt-1 text-xs leading-relaxed text-slate-600">Pengaturan dibuat seperti Editor Video Pembelajaran pada menu Kelola Ruang Belajar. Video ditampilkan langsung di Portal Guru dan Portal Murid jika dipublikasikan.</p></div></div>
                     <div class="space-y-3 rounded-xl border border-rose-100 bg-rose-50/40 p-3">
                       <label class="block text-xs font-bold text-slate-700" for="teacher-stimulasi-video">Tautan YouTube
-                        <input id="teacher-stimulasi-video" type="url" value="${escapeHTML(videoUrl)}" placeholder="https://www.youtube.com/watch?v=... atau https://youtu.be/..." class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm font-medium focus:border-emerald-500 focus:outline-none">
+                        <input id="teacher-stimulasi-video" type="url" value="${escapeHTML(videoUrl)}" placeholder="https://www.youtube.com/watch?v=... atau https://youtu.be/..." aria-describedby="teacher-stimulasi-video-help" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm font-medium focus:border-emerald-500 focus:outline-none">
                       </label>
+                      <p id="teacher-stimulasi-video-help" class="text-[10px] text-slate-500">Tautan tersimpan akan tetap digunakan sampai guru menyimpan tautan pengganti.</p>
                       <label class="flex items-start gap-2 text-xs font-bold text-slate-700"><input id="teacher-stimulasi-video-published" type="checkbox" class="mt-0.5 h-4 w-4 accent-rose-600" ${state.teacherSettings.stimulasiVideoPublished !== false ? 'checked' : ''}><span>Publikasikan video ini kepada murid<p class="mt-1 font-normal leading-relaxed text-slate-500">Jika tidak dicentang, video tidak ditampilkan di akun murid.</p></span></label>
                       <div id="teacher-stimulasi-video-preview" class="overflow-hidden rounded-xl border border-slate-100 bg-white p-2">${videoUrl ? formatVideoEmbed(videoUrl) : '<p class="p-4 text-center text-xs text-slate-500">Masukkan tautan YouTube, lalu tekan Pratinjau Video.</p>'}</div>
                       <div class="grid grid-cols-1 sm:grid-cols-2 gap-2"><button type="button" onclick="previewTeacherStimulasiVideo()" class="w-full rounded-xl border border-rose-300 bg-white px-4 py-3 text-xs font-bold text-rose-700"><i class="fa-solid fa-eye mr-2"></i>Pratinjau Video</button><button type="button" onclick="saveTeacherStimulasiSettings()" class="w-full rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black text-white hover:bg-emerald-700"><i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Video Stimulasi</button></div>
