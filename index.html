@@ -4289,8 +4289,67 @@ function renderStudentActivityForm(actId) {
                 showModal('Materi Belum Tersedia','Guru belum menyiapkan atau memublikasikan materi bacaan untuk aktivitas ini.','info');
                 return;
             }
-            const paragraphs = String(item.body).split(/\n{2,}/).map(p=>`<p class="mb-3 text-left leading-relaxed">${escapeHTML(p).replace(/\n/g,'<br>')}</p>`).join('');
-            showModal(escapeHTML(item.title), paragraphs, 'info');
+
+            const paragraphs = String(item.body).split(/\n{2,}/)
+                .map(p => `<p class="mb-4 text-left leading-relaxed whitespace-pre-line">${escapeHTML(p)}</p>`)
+                .join('');
+
+            const container = document.getElementById('modal-container');
+            if (!container) return;
+
+            // Modal materi memiliki area isi yang dapat digulir dan tombol tutup yang selalu terlihat.
+            container.innerHTML = `
+                <div id="room-reading-modal-backdrop"
+                     class="fixed inset-0 z-[210] flex items-center justify-center bg-slate-900/65 backdrop-blur-sm p-3 sm:p-5"
+                     role="presentation"
+                     onclick="if(event.target===this) closeRoomReadingModal()">
+                    <section class="relative flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border-2 border-emerald-200 bg-white shadow-2xl"
+                             style="max-height:calc(100dvh - 24px);"
+                             role="dialog" aria-modal="true" aria-labelledby="room-reading-modal-title">
+                        <header class="sticky top-0 z-10 flex shrink-0 items-start gap-3 border-b border-emerald-100 bg-white px-5 py-4 sm:px-6">
+                            <div class="min-w-0 flex-1">
+                                <p class="mb-1 text-xs font-black uppercase tracking-wider text-emerald-700">Ruang Belajar · Materi Bacaan</p>
+                                <h2 id="room-reading-modal-title" class="pr-2 text-lg font-black leading-snug text-slate-800 sm:text-xl">${escapeHTML(item.title)}</h2>
+                            </div>
+                            <button type="button"
+                                    onclick="closeRoomReadingModal()"
+                                    aria-label="Tutup materi"
+                                    title="Tutup materi"
+                                    class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                                <i class="fa-solid fa-xmark text-xl" aria-hidden="true"></i>
+                            </button>
+                        </header>
+                        <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 text-sm leading-7 text-slate-700 sm:px-6 sm:text-base">
+                            ${paragraphs}
+                        </div>
+                        <footer class="flex shrink-0 justify-end border-t border-slate-100 bg-white px-5 py-3 sm:px-6">
+                            <button type="button"
+                                    onclick="closeRoomReadingModal()"
+                                    class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2">
+                                <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                                Tutup Materi
+                            </button>
+                        </footer>
+                    </section>
+                </div>
+            `;
+
+            document.body.classList.add('overflow-hidden');
+            document.addEventListener('keydown', handleRoomReadingModalKeydown);
+            const closeButton = container.querySelector('button[aria-label="Tutup materi"]');
+            if (closeButton) closeButton.focus();
+        }
+
+        function handleRoomReadingModalKeydown(event) {
+            if (event.key === 'Escape') closeRoomReadingModal();
+        }
+
+        function closeRoomReadingModal() {
+            const container = document.getElementById('modal-container');
+            const backdrop = document.getElementById('room-reading-modal-backdrop');
+            if (container && backdrop) container.innerHTML = '';
+            document.removeEventListener('keydown', handleRoomReadingModalKeydown);
+            document.body.classList.remove('overflow-hidden');
         }
 
         // Ambil video Stimulasi yang dipublikasikan guru dari backend bersama.
