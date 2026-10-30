@@ -5405,6 +5405,7 @@ function renderStudentActivityForm(actId) {
         // HALAMAN PANDUAN DAN PENGATURAN GURU
         let teacherGuideTab = 'guru';
         let guideResourceCache = { guru: [], siswa: [] };
+        let editingGuideResourceId = '';
         const guideCategories = {
           guru: [
             {id:'guru_apk', title:'Dokumen Resmi APK', desc:'Dokumen resmi Acuan Pengembangan Kompetensi (APK).'},
@@ -5414,14 +5415,69 @@ function renderStudentActivityForm(actId) {
           ],
           siswa: [1,2,3,4,5].map(n=>({id:`lkpd_act${n}`,title:`LKPD Aktivitas ${n}`,desc:`Lembar Kerja Peserta Didik untuk Aktivitas ${n}.`}))
         };
-        function setTeacherGuideTab(tab){teacherGuideTab=['guru','siswa'].includes(tab)?tab:'guru';renderTeacherBoard();}
+        function setTeacherGuideTab(tab){editingGuideResourceId='';teacherGuideTab=['guru','siswa'].includes(tab)?tab:'guru';renderTeacherBoard();}
         function guideEsc(v){return escapeHTML(String(v==null?'':v));}
         function guideFormatBytes(bytes){if(!Number(bytes))return '';const units=['B','KB','MB','GB'];let n=Number(bytes),i=0;while(n>=1024&&i<units.length-1){n/=1024;i++;}return `${n.toFixed(i?1:0)} ${units[i]}`;}
         function renderGuideResourceList(tab, targetId){
           const target=document.getElementById(targetId);if(!target)return;
           const items=(guideResourceCache[tab]||[]).filter(x=>x.category===tab || (tab==='siswa'&&/^lkpd_act[1-5]$/.test(x.category)) || (tab==='guru'&&/^guru_(apk|srl|bupati|modul)$/.test(x.category)));
           if(!items.length){target.innerHTML='<div class="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center text-xs text-slate-500"><i class="fa-solid fa-folder-open mb-2 text-2xl text-slate-300"></i><p>Belum ada dokumen yang diunggah.</p><p class="mt-1">Guru dapat mengunggah berkas melalui formulir di atas.</p></div>';return;}
-          target.innerHTML=items.map(item=>{const cat=(guideCategories[tab]||[]).find(c=>c.id===item.category);return `<article class="flex min-w-0 items-center gap-3 rounded-xl border border-slate-200 bg-white p-3"><span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${tab==='guru'?'bg-emerald-50 text-emerald-700':'bg-sky-50 text-sky-700'}"><i class="fa-solid ${/pdf/i.test(item.mimeType||'')?'fa-file-pdf':'fa-file-lines'} text-lg"></i></span><div class="min-w-0 flex-1"><h4 class="break-words text-xs font-black text-slate-800">${guideEsc(item.fileName||item.title)}</h4><p class="mt-1 text-[10px] text-slate-500">${guideEsc(cat?cat.title:item.category)} · ${guideEsc(guideFormatBytes(item.sizeBytes))}${item.uploadedAt?' · '+guideEsc(item.uploadedAt):''}</p></div><a href="${guideEsc(item.downloadUrl||item.url)}" target="_blank" rel="noopener noreferrer" class="shrink-0 rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black text-white hover:bg-emerald-700"><i class="fa-solid fa-download mr-1"></i>Unduh</a></article>`}).join('');
+          target.innerHTML=items.map(item=>{const cat=(guideCategories[tab]||[]).find(c=>c.id===item.category);return `<article class="flex min-w-0 flex-wrap items-center gap-3 rounded-xl border border-slate-200 bg-white p-3"><span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${tab==='guru'?'bg-emerald-50 text-emerald-700':'bg-sky-50 text-sky-700'}"><i class="fa-solid ${/pdf/i.test(item.mimeType||'')?'fa-file-pdf':'fa-file-lines'} text-lg"></i></span><div class="min-w-0 flex-1"><h4 class="break-words text-xs font-black text-slate-800">${guideEsc(item.title||item.fileName)}</h4><p class="mt-1 break-words text-[10px] text-slate-500">${guideEsc(item.fileName||'')} · ${guideEsc(cat?cat.title:item.category)} · ${guideEsc(guideFormatBytes(item.sizeBytes))}${item.uploadedAt?' · '+guideEsc(item.uploadedAt):''}</p></div><div class="ml-auto flex shrink-0 items-center gap-2"><button type="button" onclick="editGuideResource('${guideEsc(item.resourceId)}')" class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-black text-amber-800 hover:bg-amber-100"><i class="fa-solid fa-pen-to-square mr-1"></i>Edit</button><button type="button" onclick="deleteGuideResource('${guideEsc(item.resourceId)}')" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[10px] font-black text-rose-700 hover:bg-rose-100"><i class="fa-solid fa-trash-can mr-1"></i>Hapus</button><a href="${guideEsc(item.downloadUrl||item.url)}" target="_blank" rel="noopener noreferrer" class="rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black text-white hover:bg-emerald-700"><i class="fa-solid fa-download mr-1"></i>Unduh</a></div></article>`}).join('');
+        }
+        function editGuideResource(resourceId){
+          const item=[...(guideResourceCache.guru||[]),...(guideResourceCache.siswa||[])].find(x=>String(x.resourceId)===String(resourceId));
+          if(!item){showModal('Dokumen Tidak Ditemukan','Muat ulang daftar dokumen, lalu coba edit kembali.','warning');return;}
+          editingGuideResourceId=String(item.resourceId);
+          const categoryEl=document.getElementById('guide-upload-category');
+          const titleEl=document.getElementById('guide-upload-title');
+          const fileEl=document.getElementById('guide-upload-file');
+          const button=document.getElementById('guide-upload-button');
+          const cancel=document.getElementById('guide-cancel-edit-button');
+          const heading=document.getElementById('guide-upload-heading');
+          if(categoryEl)categoryEl.value=item.category;
+          if(titleEl)titleEl.value=item.title||item.fileName||'';
+          if(fileEl)fileEl.value='';
+          if(button)button.innerHTML='<i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Perubahan';
+          if(cancel)cancel.classList.remove('hidden');
+          if(heading)heading.innerHTML='<i class="fa-solid fa-pen-to-square mr-2"></i>Edit Dokumen';
+          const note=document.getElementById('guide-upload-note');
+          if(note)note.textContent='Ubah kategori atau nama tampilan. Pilih berkas baru hanya jika ingin mengganti file yang salah diunggah. Kosongkan pilihan berkas untuk mempertahankan file lama.';
+          const form=document.getElementById('guide-upload-form');
+          if(form)form.scrollIntoView({behavior:'smooth',block:'center'});
+        }
+        async function deleteGuideResource(resourceId){
+          const item=[...(guideResourceCache.guru||[]),...(guideResourceCache.siswa||[])].find(x=>String(x.resourceId)===String(resourceId));
+          if(!item){showModal('Dokumen Tidak Ditemukan','Muat ulang daftar dokumen, lalu coba kembali.','warning');return;}
+          const label=String(item.title||item.fileName||'dokumen ini');
+          const confirmed=window.confirm(`Hapus dokumen "${label}"?\n\nDokumen akan dihapus dari daftar panduan dan file Google Drive dipindahkan ke Sampah. Tindakan ini tidak dapat dibatalkan dari PORTAL-SRL.`);
+          if(!confirmed)return;
+          if(!state.teacherAuth||!state.teacherAuth.token){showModal('Login Guru Diperlukan','Silakan login sebagai guru untuk menghapus dokumen panduan.','warning');return;}
+          try{
+            const result=await apiCall('deleteGuideResource',{resource_id:String(resourceId)});
+            if(!result||result.status!=='success')throw new Error(result&&result.message||'Penghapusan dokumen gagal.');
+            if(String(editingGuideResourceId)===String(resourceId))cancelEditGuideResource();
+            await refreshGuideResources();
+            showModal('Dokumen Dihapus',result.message||'Dokumen berhasil dihapus dari daftar panduan.','success');
+          }catch(err){
+            showModal('Gagal Menghapus Dokumen',err.message||'Periksa koneksi dan konfigurasi Google Apps Script.','error');
+          }
+        }
+        function cancelEditGuideResource(){
+          editingGuideResourceId='';
+          const categoryEl=document.getElementById('guide-upload-category');
+          const titleEl=document.getElementById('guide-upload-title');
+          const fileEl=document.getElementById('guide-upload-file');
+          const button=document.getElementById('guide-upload-button');
+          const cancel=document.getElementById('guide-cancel-edit-button');
+          const heading=document.getElementById('guide-upload-heading');
+          const note=document.getElementById('guide-upload-note');
+          if(titleEl)titleEl.value='';
+          if(fileEl)fileEl.value='';
+          if(categoryEl)categoryEl.selectedIndex=0;
+          if(button)button.innerHTML='<i class="fa-solid fa-cloud-arrow-up mr-2"></i>Unggah Dokumen';
+          if(cancel)cancel.classList.add('hidden');
+          if(heading)heading.innerHTML='<i class="fa-solid fa-cloud-arrow-up mr-2"></i>Unggah Dokumen';
+          if(note)note.textContent='Unggah PDF, Word, Excel, PowerPoint, atau gambar (maksimal 8 MB). Dokumen disimpan di Google Drive dan database sesuai kelas guru.';
         }
         async function refreshGuideResources(){
           const studentIdentity = state.student && state.student.nisn
@@ -5449,27 +5505,42 @@ function renderStudentActivityForm(actId) {
           const titleEl=document.getElementById('guide-upload-title');
           const category=categoryEl?categoryEl.value:'';
           const file=fileEl&&fileEl.files?fileEl.files[0]:null;
-          if(!category||!file){showModal('Berkas Belum Dipilih','Pilih kategori dan berkas yang akan diunggah.','warning');return;}
-          if(file.size>8*1024*1024){showModal('Ukuran Berkas Terlalu Besar','Ukuran maksimum berkas adalah 8 MB. Kompres PDF atau pilih berkas yang lebih kecil.','warning');return;}
-          if(!state.teacherAuth||!state.teacherAuth.token){showModal('Login Guru Diperlukan','Silakan login sebagai guru untuk mengunggah dokumen panduan.','warning');return;}
-          const button=document.getElementById('guide-upload-button');if(button){button.disabled=true;button.innerHTML='<i class="fa-solid fa-spinner fa-spin mr-2"></i>Mengunggah...';}
+          const isEditing=!!editingGuideResourceId;
+          if(!category||(!file&&!isEditing)){showModal('Berkas Belum Dipilih','Pilih kategori dan berkas yang akan diunggah. Saat mengedit, berkas baru bersifat opsional.','warning');return;}
+          if(file&&file.size>8*1024*1024){showModal('Ukuran Berkas Terlalu Besar','Ukuran maksimum berkas adalah 8 MB. Kompres PDF atau pilih berkas yang lebih kecil.','warning');return;}
+          if(!state.teacherAuth||!state.teacherAuth.token){showModal('Login Guru Diperlukan','Silakan login sebagai guru untuk mengelola dokumen panduan.','warning');return;}
+          const button=document.getElementById('guide-upload-button');
+          const cancel=document.getElementById('guide-cancel-edit-button');
+          const originalLabel=isEditing?'<i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Perubahan':'<i class="fa-solid fa-cloud-arrow-up mr-2"></i>Unggah Dokumen';
+          if(button){button.disabled=true;button.innerHTML='<i class="fa-solid fa-spinner fa-spin mr-2"></i>Menyimpan...';}
+          if(cancel)cancel.disabled=true;
           try{
-            const dataUrl=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result||''));reader.onerror=()=>reject(new Error('Berkas tidak dapat dibaca oleh browser.'));reader.readAsDataURL(file);});
-            const base64=dataUrl.split(',')[1]||'';
-            const result=await apiCall('uploadGuideResource',{category,file_name:file.name,title:(titleEl&&titleEl.value||'').trim(),mime_type:file.type||'application/octet-stream',file_base64:base64,size_bytes:file.size});
-            if(!result||result.status!=='success')throw new Error(result&&result.message||'Unggahan gagal.');
-            if(titleEl)titleEl.value='';if(fileEl)fileEl.value='';
+            let payload={category,title:(titleEl&&titleEl.value||'').trim()};
+            if(isEditing)payload.resource_id=editingGuideResourceId;
+            if(file){
+              const dataUrl=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result||''));reader.onerror=()=>reject(new Error('Berkas tidak dapat dibaca oleh browser.'));reader.readAsDataURL(file);});
+              payload.file_name=file.name;
+              payload.mime_type=file.type||'application/octet-stream';
+              payload.file_base64=dataUrl.split(',')[1]||'';
+              payload.size_bytes=file.size;
+            }
+            const action=isEditing?'updateGuideResource':'uploadGuideResource';
+            const result=await apiCall(action,payload);
+            if(!result||result.status!=='success')throw new Error(result&&result.message||'Penyimpanan gagal.');
+            const savedName=file?file.name:(result.fileName||'dokumen');
+            editingGuideResourceId='';
             await refreshGuideResources();
-            showModal('Unggahan Berhasil',`${file.name} berhasil disimpan dan tersedia untuk diunduh.`, 'success');
-          }catch(err){showModal('Gagal Mengunggah',err.message||'Periksa koneksi dan konfigurasi Google Apps Script.','error');}
-          finally{if(button){button.disabled=false;button.innerHTML='<i class="fa-solid fa-cloud-arrow-up mr-2"></i>Unggah Dokumen';}}
+            cancelEditGuideResource();
+            showModal(isEditing?'Perubahan Berhasil':'Unggahan Berhasil',isEditing?'Dokumen berhasil diperbarui. Jika Anda memilih berkas baru, file lama sudah digantikan pada daftar dokumen.':`${savedName} berhasil disimpan dan tersedia untuk diunduh.`, 'success');
+          }catch(err){showModal(isEditing?'Gagal Mengedit Dokumen':'Gagal Mengunggah',err.message||'Periksa koneksi dan konfigurasi Google Apps Script.','error');}
+          finally{if(button){button.disabled=false;button.innerHTML=originalLabel;}if(cancel)cancel.disabled=false;}
         }
         function renderTeacherPanduanView(){
           const tabs=[['guru','Panduan Guru','fa-user-tie'],['siswa','Panduan Murid','fa-user-graduate']];
           const student=teacherGuideTab==='siswa';
           const categories=guideCategories[student?'siswa':'guru'];
           const tabHtml=tabs.map(([id,label,ico])=>`<button onclick="setTeacherGuideTab('${id}')" class="flex items-center justify-center gap-2 rounded-xl px-3 py-3 text-xs font-bold ${teacherGuideTab===id?'bg-emerald-600 text-white':'bg-slate-50 text-slate-700 hover:bg-emerald-50'}"><i class="fa-solid ${ico}"></i>${label}</button>`).join('');
-          const uploadForm=`<section class="mb-5 rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4"><div class="mb-3"><h3 class="text-sm font-black text-emerald-950"><i class="fa-solid fa-cloud-arrow-up mr-2"></i>Unggah Dokumen</h3><p class="mt-1 text-xs text-slate-600">Unggah PDF, Word, Excel, PowerPoint, atau gambar (maksimal 8 MB). Dokumen disimpan di Google Drive dan database sesuai kelas guru.</p></div><div class="grid gap-3 md:grid-cols-2"><label class="block text-xs font-bold text-slate-700">Kategori dokumen<select id="guide-upload-category" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm">${categories.map(c=>`<option value="${c.id}">${c.title}</option>`).join('')}</select></label><label class="block text-xs font-bold text-slate-700">Nama tampilan (opsional)<input id="guide-upload-title" maxlength="150" placeholder="Contoh: LKPD Aktivitas 1" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"></label><label class="block text-xs font-bold text-slate-700 md:col-span-2">Pilih berkas<input id="guide-upload-file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp" class="mt-1 block w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"></label></div><div class="mt-3 flex justify-end"><button id="guide-upload-button" onclick="uploadGuideResource()" class="rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black text-white hover:bg-emerald-700"><i class="fa-solid fa-cloud-arrow-up mr-2"></i>Unggah Dokumen</button></div></section>`;
+          const uploadForm=`<section id="guide-upload-form" class="mb-5 rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4"><div class="mb-3"><h3 id="guide-upload-heading" class="text-sm font-black text-emerald-950"><i class="fa-solid fa-cloud-arrow-up mr-2"></i>Unggah Dokumen</h3><p id="guide-upload-note" class="mt-1 text-xs text-slate-600">Unggah PDF, Word, Excel, PowerPoint, atau gambar (maksimal 8 MB). Dokumen disimpan di Google Drive dan database sesuai kelas guru.</p></div><div class="grid gap-3 md:grid-cols-2"><label class="block text-xs font-bold text-slate-700">Kategori dokumen<select id="guide-upload-category" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm">${categories.map(c=>`<option value="${c.id}">${c.title}</option>`).join('')}</select></label><label class="block text-xs font-bold text-slate-700">Nama tampilan<input id="guide-upload-title" maxlength="150" placeholder="Contoh: LKPD Aktivitas 1" class="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"></label><label class="block text-xs font-bold text-slate-700 md:col-span-2">Pilih berkas (wajib saat unggah, opsional saat edit)<input id="guide-upload-file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.odp,.txt,.rtf,.jpg,.jpeg,.png,.webp" class="mt-1 block w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"></label></div><div class="mt-3 flex flex-wrap justify-end gap-2"><button id="guide-cancel-edit-button" type="button" onclick="cancelEditGuideResource()" class="hidden rounded-xl border border-slate-300 bg-white px-4 py-3 text-xs font-black text-slate-600 hover:bg-slate-50">Batal Edit</button><button id="guide-upload-button" onclick="uploadGuideResource()" class="rounded-xl bg-emerald-600 px-4 py-3 text-xs font-black text-white hover:bg-emerald-700"><i class="fa-solid fa-cloud-arrow-up mr-2"></i>Unggah Dokumen</button></div></section>`;
           const categoryInfo=categories.map(c=>`<div class="rounded-xl border border-slate-100 bg-white p-3"><h4 class="text-xs font-black text-slate-800">${c.title}</h4><p class="mt-1 text-[11px] text-slate-500">${c.desc}</p></div>`).join('');
           const panelId='guide-resource-list';
           setTimeout(()=>refreshGuideResources(),0);
