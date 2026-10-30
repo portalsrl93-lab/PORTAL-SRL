@@ -1963,7 +1963,7 @@
             'saveTeacherClass', 'savePengaturan', 'saveTeacherSettings', 'saveStimulasiContent',
             'saveRoomLearningContent', 'saveStimulasiData', 'saveRuangBelajarData', 'saveRestrictionStatus', 'saveTeacherEvaluation',
             'saveTeacherActivityAssessment', 'saveTeacherFinalCapaian', 'saveTeacherFeedback', 'savePortfolioAssessment',
-            'uploadFileToDrive', 'uploadStudentFile', 'saveStudentActivity', 'uploadGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile', 'saveStudentGroups'
+            'uploadFileToDrive', 'uploadStudentFile', 'saveStudentActivity', 'uploadGuideResource', 'updateGuideResource', 'deleteGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile', 'saveStudentGroups'
         ]);
         function getApiSessionCacheKey(action, payload) {
             let scope = '';
@@ -2008,7 +2008,7 @@
                 ? beginButtonLoading(document.activeElement)
                 : null;
             try {
-                const protectedTeacherActions = ['getTeacherData', 'getLaporanData', 'getTeacherSchoolProfile', 'saveTeacherSchoolProfile', 'addTeacherStudent', 'updateTeacherStudent', 'saveTeacherClass', 'saveTeacherSettings', 'saveRoomLearningContent', 'saveStimulasiContent', 'saveStimulasiData', 'saveRuangBelajarData', 'saveTeacherEvaluation', 'savePortfolioAssessment', 'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'getGuideResources', 'uploadGuideResource', 'getTeacherNotifications', 'markTeacherNotificationRead'];
+                const protectedTeacherActions = ['getTeacherData', 'getLaporanData', 'getTeacherSchoolProfile', 'saveTeacherSchoolProfile', 'addTeacherStudent', 'updateTeacherStudent', 'saveTeacherClass', 'saveTeacherSettings', 'saveRoomLearningContent', 'saveStimulasiContent', 'saveStimulasiData', 'saveRuangBelajarData', 'saveTeacherEvaluation', 'savePortfolioAssessment', 'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'getGuideResources', 'uploadGuideResource', 'updateGuideResource', 'deleteGuideResource', 'getTeacherNotifications', 'markTeacherNotificationRead'];
                 const requestPayload = { ...payload };
                 if (protectedTeacherActions.includes(action) && state.teacherAuth && state.teacherAuth.token) {
                     requestPayload.teacherToken = state.teacherAuth.token;
@@ -2020,7 +2020,7 @@
                 };
                 if (controller) requestOptions.signal = controller.signal;
 
-                const isUploadAction = ['uploadStudentFile', 'uploadFileToDrive', 'uploadGuideResource'].includes(action);
+                const isUploadAction = ['uploadStudentFile', 'uploadFileToDrive', 'uploadGuideResource', 'updateGuideResource'].includes(action);
                 const isWriteAction = API_SESSION_MUTATING_ACTIONS.has(action);
                 const requestTimeoutMs = isUploadAction
                     ? API_UPLOAD_TIMEOUT_MS
@@ -2061,7 +2061,7 @@
                 return result;
             } catch (err) {
                 const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
-                const timeoutSeconds = action === 'uploadStudentFile' || action === 'uploadFileToDrive' || action === 'uploadGuideResource'
+                const timeoutSeconds = action === 'uploadStudentFile' || action === 'uploadFileToDrive' || action === 'uploadGuideResource' || action === 'updateGuideResource'
                     ? API_UPLOAD_TIMEOUT_MS / 1000
                     : (API_SESSION_MUTATING_ACTIONS.has(action) ? API_WRITE_TIMEOUT_MS / 1000 : API_READ_TIMEOUT_MS / 1000);
                 const message = timedOut
