@@ -3007,7 +3007,9 @@
         }
 
         function renderVideoPanduanCard(role, result) {
-            const target = document.getElementById('guide-video-' + role.toLowerCase());
+            // ID pada markup menggunakan student/teacher, sedangkan data memakai MURID/GURU.
+            const targetId = role === 'MURID' ? 'guide-video-student' : 'guide-video-teacher';
+            const target = document.getElementById(targetId);
             if (!target) return;
             const video = result && result.success && Array.isArray(result.data)
                 ? result.data.find(item => item.role === role && item.urlVideo)
