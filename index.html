@@ -1138,7 +1138,7 @@
                       <div class="relative w-full aspect-video rounded-2xl overflow-hidden shadow-md border border-slate-200 bg-black">
                         <iframe class="absolute inset-0 w-full h-full" src="${embedUrl}" title="Video Stimulasi Sekolah Ramah Lingkungan" referrerpolicy="origin" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
                       </div>
-                      
+                      <p class="mt-2 text-center text-xs text-slate-500">Video diputar langsung di PORTAL-SRL. Jika pemutar menampilkan Error 153, berarti YouTube belum menerima identitas referer dari halaman portal.</p>
                     </div>`;
             }
             let parsed;
@@ -1963,7 +1963,7 @@
             'saveTeacherClass', 'savePengaturan', 'saveTeacherSettings', 'saveStimulasiContent',
             'saveRoomLearningContent', 'saveStimulasiData', 'saveRuangBelajarData', 'saveRestrictionStatus', 'saveTeacherEvaluation',
             'saveTeacherActivityAssessment', 'saveTeacherFinalCapaian', 'saveTeacherFeedback', 'savePortfolioAssessment',
-            'uploadFileToDrive', 'uploadStudentFile', 'saveStudentActivity', 'uploadGuideResource', 'updateGuideResource', 'deleteGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile', 'saveStudentGroups'
+            'uploadFileToDrive', 'uploadStudentFile', 'saveStudentActivity', 'uploadGuideResource', 'markTeacherNotificationRead', 'saveTeacherSchoolProfile', 'saveStudentGroups'
         ]);
         function getApiSessionCacheKey(action, payload) {
             let scope = '';
@@ -2008,7 +2008,7 @@
                 ? beginButtonLoading(document.activeElement)
                 : null;
             try {
-                const protectedTeacherActions = ['getTeacherData', 'getLaporanData', 'getTeacherSchoolProfile', 'saveTeacherSchoolProfile', 'addTeacherStudent', 'updateTeacherStudent', 'saveTeacherClass', 'saveTeacherSettings', 'saveRoomLearningContent', 'saveStimulasiContent', 'saveStimulasiData', 'saveRuangBelajarData', 'saveTeacherEvaluation', 'savePortfolioAssessment', 'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'getGuideResources', 'uploadGuideResource', 'updateGuideResource', 'deleteGuideResource', 'getTeacherNotifications', 'markTeacherNotificationRead'];
+                const protectedTeacherActions = ['getTeacherData', 'getLaporanData', 'getTeacherSchoolProfile', 'saveTeacherSchoolProfile', 'addTeacherStudent', 'updateTeacherStudent', 'saveTeacherClass', 'saveTeacherSettings', 'saveRoomLearningContent', 'saveStimulasiContent', 'saveStimulasiData', 'saveRuangBelajarData', 'saveTeacherEvaluation', 'savePortfolioAssessment', 'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'getGuideResources', 'uploadGuideResource', 'getTeacherNotifications', 'markTeacherNotificationRead'];
                 const requestPayload = { ...payload };
                 if (protectedTeacherActions.includes(action) && state.teacherAuth && state.teacherAuth.token) {
                     requestPayload.teacherToken = state.teacherAuth.token;
@@ -2020,7 +2020,7 @@
                 };
                 if (controller) requestOptions.signal = controller.signal;
 
-                const isUploadAction = ['uploadStudentFile', 'uploadFileToDrive', 'uploadGuideResource', 'updateGuideResource'].includes(action);
+                const isUploadAction = ['uploadStudentFile', 'uploadFileToDrive', 'uploadGuideResource'].includes(action);
                 const isWriteAction = API_SESSION_MUTATING_ACTIONS.has(action);
                 const requestTimeoutMs = isUploadAction
                     ? API_UPLOAD_TIMEOUT_MS
@@ -2061,7 +2061,7 @@
                 return result;
             } catch (err) {
                 const timedOut = err && (err.name === 'TimeoutError' || err.name === 'AbortError');
-                const timeoutSeconds = action === 'uploadStudentFile' || action === 'uploadFileToDrive' || action === 'uploadGuideResource' || action === 'updateGuideResource'
+                const timeoutSeconds = action === 'uploadStudentFile' || action === 'uploadFileToDrive' || action === 'uploadGuideResource'
                     ? API_UPLOAD_TIMEOUT_MS / 1000
                     : (API_SESSION_MUTATING_ACTIONS.has(action) ? API_WRITE_TIMEOUT_MS / 1000 : API_READ_TIMEOUT_MS / 1000);
                 const message = timedOut
@@ -2991,13 +2991,7 @@
             document.body.classList.remove('overflow-hidden');
         }
 
-        // Isi URL video YouTube panduan setelah video resmi pengembang tersedia.
-        // Contoh: student: 'https://www.youtube.com/watch?v=VIDEO_ID'
-        const PORTAL_SRL_GUIDE_VIDEOS = {
-            student: '', // Video Panduan Mengakses Portal Murid
-            teacher: ''  // Video Panduan Mengakses Portal Guru
-        };
-
+        // Video Panduan dibaca langsung dari spreadsheet khusus melalui Code.gs.
         function getYouTubeEmbedUrl(url) {
             const value = String(url || '').trim();
             if (!value) return '';
@@ -3012,24 +3006,42 @@
             } catch (e) { return ''; }
         }
 
-        function openVideoPanduanModal() {
+        function renderVideoPanduanCard(role, result) {
+            const target = document.getElementById('guide-video-' + role.toLowerCase());
+            if (!target) return;
+            const video = result && result.success && Array.isArray(result.data)
+                ? result.data.find(item => item.role === role && item.urlVideo)
+                : null;
+            const title = role === 'MURID' ? 'Panduan Mengakses Portal Murid' : 'Panduan Mengakses Portal Guru';
+            const embedUrl = video ? getYouTubeEmbedUrl(video.urlVideo) : '';
+            if (embedUrl) {
+                target.innerHTML = `<iframe class="absolute inset-0 h-full w-full" src="${embedUrl}" title="${title}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>`;
+            } else {
+                const message = result && result.status === 'error'
+                    ? 'Video belum dapat dimuat. Silakan coba kembali beberapa saat lagi.'
+                    : 'Pengembang akan menambahkan tautan YouTube panduan ini melalui spreadsheet Video Panduan.';
+                target.innerHTML = `<div class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-50 p-5 text-center"><span class="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-100 text-rose-600"><i class="fa-brands fa-youtube text-3xl"></i></span><p class="text-sm font-black text-slate-700">Video belum ditambahkan</p><p class="max-w-xs text-xs leading-relaxed text-slate-500">${message}</p></div>`;
+            }
+        }
+
+        async function openVideoPanduanModal() {
             const modal = document.getElementById('video-panduan-modal');
             if (!modal) return;
-            const videos = [
-                { key: 'student', title: 'Video Panduan Mengakses Portal Murid', description: 'Panduan masuk, mengakses aktivitas, mengirim tugas, dan melihat pencapaian.' },
-                { key: 'teacher', title: 'Video Panduan Mengakses Portal Guru', description: 'Panduan mengelola kelas, memeriksa tugas, memberi umpan balik, dan merekap penilaian APK.' }
-            ];
-            videos.forEach(item => {
-                const target = document.getElementById('guide-video-' + item.key);
-                if (!target) return;
-                const embedUrl = getYouTubeEmbedUrl(PORTAL_SRL_GUIDE_VIDEOS[item.key]);
-                target.innerHTML = embedUrl
-                    ? `<iframe class="absolute inset-0 h-full w-full" src="${embedUrl}" title="${item.title}" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>`
-                    : `<div class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-slate-50 p-5 text-center"><span class="flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-100 text-rose-600"><i class="fa-brands fa-youtube text-3xl"></i></span><p class="text-sm font-black text-slate-700">Video belum ditambahkan</p><p class="max-w-xs text-xs leading-relaxed text-slate-500">Pengembang akan menyematkan video YouTube panduan ini setelah tautan video tersedia.</p></div>`;
-            });
             modal.classList.remove('hidden');
             modal.classList.add('flex');
             document.body.classList.add('overflow-hidden');
+
+            ['student', 'teacher'].forEach(key => {
+                const target = document.getElementById('guide-video-' + key);
+                if (target) target.innerHTML = '<div class="absolute inset-0 flex items-center justify-center bg-slate-50 text-sm font-semibold text-slate-500"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Memuat video panduan...</div>';
+            });
+
+            const [studentResult, teacherResult] = await Promise.all([
+                apiCall('getVideoPanduan', { role: 'MURID' }),
+                apiCall('getVideoPanduan', { role: 'GURU' })
+            ]);
+            renderVideoPanduanCard('MURID', studentResult);
+            renderVideoPanduanCard('GURU', teacherResult);
         }
 
         function closeVideoPanduanModal(event) {
@@ -4289,67 +4301,8 @@ function renderStudentActivityForm(actId) {
                 showModal('Materi Belum Tersedia','Guru belum menyiapkan atau memublikasikan materi bacaan untuk aktivitas ini.','info');
                 return;
             }
-
-            const paragraphs = String(item.body).split(/\n{2,}/)
-                .map(p => `<p class="mb-4 text-left leading-relaxed whitespace-pre-line">${escapeHTML(p)}</p>`)
-                .join('');
-
-            const container = document.getElementById('modal-container');
-            if (!container) return;
-
-            // Modal materi memiliki area isi yang dapat digulir dan tombol tutup yang selalu terlihat.
-            container.innerHTML = `
-                <div id="room-reading-modal-backdrop"
-                     class="fixed inset-0 z-[210] flex items-center justify-center bg-slate-900/65 backdrop-blur-sm p-3 sm:p-5"
-                     role="presentation"
-                     onclick="if(event.target===this) closeRoomReadingModal()">
-                    <section class="relative flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border-2 border-emerald-200 bg-white shadow-2xl"
-                             style="max-height:calc(100dvh - 24px);"
-                             role="dialog" aria-modal="true" aria-labelledby="room-reading-modal-title">
-                        <header class="sticky top-0 z-10 flex shrink-0 items-start gap-3 border-b border-emerald-100 bg-white px-5 py-4 sm:px-6">
-                            <div class="min-w-0 flex-1">
-                                <p class="mb-1 text-xs font-black uppercase tracking-wider text-emerald-700">Ruang Belajar · Materi Bacaan</p>
-                                <h2 id="room-reading-modal-title" class="pr-2 text-lg font-black leading-snug text-slate-800 sm:text-xl">${escapeHTML(item.title)}</h2>
-                            </div>
-                            <button type="button"
-                                    onclick="closeRoomReadingModal()"
-                                    aria-label="Tutup materi"
-                                    title="Tutup materi"
-                                    class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 focus:outline-none focus:ring-2 focus:ring-emerald-500">
-                                <i class="fa-solid fa-xmark text-xl" aria-hidden="true"></i>
-                            </button>
-                        </header>
-                        <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 text-sm leading-7 text-slate-700 sm:px-6 sm:text-base">
-                            ${paragraphs}
-                        </div>
-                        <footer class="flex shrink-0 justify-end border-t border-slate-100 bg-white px-5 py-3 sm:px-6">
-                            <button type="button"
-                                    onclick="closeRoomReadingModal()"
-                                    class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2">
-                                <i class="fa-solid fa-xmark" aria-hidden="true"></i>
-                                Tutup Materi
-                            </button>
-                        </footer>
-                    </section>
-                </div>
-            `;
-
-            document.body.classList.add('overflow-hidden');
-            document.addEventListener('keydown', handleRoomReadingModalKeydown);
-            const closeButton = container.querySelector('button[aria-label="Tutup materi"]');
-            if (closeButton) closeButton.focus();
-        }
-
-        function handleRoomReadingModalKeydown(event) {
-            if (event.key === 'Escape') closeRoomReadingModal();
-        }
-
-        function closeRoomReadingModal() {
-            const container = document.getElementById('modal-container');
-            const backdrop = document.getElementById('room-reading-modal-backdrop');
-            if (container && backdrop) container.innerHTML = '';
-            document.removeEventListener('keydown', handleRoomReadingModalKeydown);
-            document.body.classList.remove('overflow-hidden');
+            const paragraphs = String(item.body).split(/\n{2,}/).map(p=>`<p class="mb-3 text-left leading-relaxed">${escapeHTML(p).replace(/\n/g,'<br>')}</p>`).join('');
+            showModal(escapeHTML(item.title), paragraphs, 'info');
         }
 
         // Ambil video Stimulasi yang dipublikasikan guru dari backend bersama.
