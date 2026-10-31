@@ -3036,12 +3036,32 @@
                 if (target) target.innerHTML = '<div class="absolute inset-0 flex items-center justify-center bg-slate-50 text-sm font-semibold text-slate-500"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Memuat video panduan...</div>';
             });
 
-            const [studentResult, teacherResult] = await Promise.all([
-                apiCall('getVideoPanduan', { role: 'MURID' }),
-                apiCall('getVideoPanduan', { role: 'GURU' })
-            ]);
-            renderVideoPanduanCard('MURID', studentResult);
-            renderVideoPanduanCard('GURU', teacherResult);
+            // Satu permintaan untuk kedua role agar tidak menunggu dua request terpisah.
+            // Batas waktu lokal memastikan indikator loading tidak tertahan tanpa akhir.
+            let timeoutId = null;
+            try {
+                const timeoutPromise = new Promise(resolve => {
+                    timeoutId = setTimeout(() => resolve({
+                        status: 'error', success: false, data: [],
+                        message: 'Permintaan Video Panduan belum menerima respons dalam 15 detik. Silakan tutup lalu coba kembali.'
+                    }), 15000);
+                });
+                const result = await Promise.race([
+                    apiCall('getVideoPanduan', { role: 'ALL' }),
+                    timeoutPromise
+                ]);
+                renderVideoPanduanCard('MURID', result);
+                renderVideoPanduanCard('GURU', result);
+            } catch (error) {
+                const failedResult = {
+                    status: 'error', success: false, data: [],
+                    message: error && error.message ? error.message : 'Koneksi Video Panduan gagal.'
+                };
+                renderVideoPanduanCard('MURID', failedResult);
+                renderVideoPanduanCard('GURU', failedResult);
+            } finally {
+                if (timeoutId !== null) clearTimeout(timeoutId);
+            }
         }
 
         function closeVideoPanduanModal(event) {
