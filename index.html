@@ -4309,7 +4309,7 @@ function renderStudentActivityForm(actId) {
                 }
             }
             const draftActions = `<div class="activity-submit-layout"><div class="activity-primary-actions"><button type="button" onclick="saveStudentActivityDraft('${actId}')" class="rounded-2xl border border-sky-300 bg-white px-6 py-3 text-sm font-black text-sky-800 shadow-sm"><i class="fa-solid fa-floppy-disk mr-2"></i>Simpan Draft</button><button type="button" onclick="submitStudentActivity('${actId}')" class="rounded-2xl border border-emerald-300 bg-emerald-50 px-6 py-3 text-sm font-black text-emerald-800 shadow-sm"><i class="fa-solid fa-paper-plane mr-2"></i>Kirim Tugas</button></div></div>`;
-            return `<div class="space-y-4 student-activity-draft-scope" data-activity-id="${actId}">${hero}<div id="student-draft-status-${actId}" class="student-draft-status text-xs font-semibold rounded-lg px-3 py-2 mb-2 bg-emerald-50 text-emerald-700 border border-emerald-100" role="status">✓ Draf otomatis tersimpan di perangkat ini</div>${guidePanel}${remainingForm}${draftActions}${navigationHTML}</div>`;
+            return `<div class="space-y-4 student-activity-draft-scope" data-activity-id="${actId}">${hero}${guidePanel}${remainingForm}${draftActions}${navigationHTML}</div>`;
         }
 
         function openRoomReading(index) {
