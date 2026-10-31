@@ -2008,10 +2008,26 @@
                 ? beginButtonLoading(document.activeElement)
                 : null;
             try {
-                const protectedTeacherActions = ['getTeacherData', 'getLaporanData', 'getTeacherSchoolProfile', 'saveTeacherSchoolProfile', 'addTeacherStudent', 'updateTeacherStudent', 'saveTeacherClass', 'saveTeacherSettings', 'saveRoomLearningContent', 'saveStimulasiContent', 'saveStimulasiData', 'saveRuangBelajarData', 'saveTeacherEvaluation', 'savePortfolioAssessment', 'saveTeacherActivityAssessment', 'saveTeacherFeedback', 'getGuideResources', 'uploadGuideResource', 'getTeacherNotifications', 'markTeacherNotificationRead'];
+                const protectedTeacherActions = [
+                    'getTeacherData', 'getLaporanData', 'getTeacherSchoolProfile', 'saveTeacherSchoolProfile',
+                    'addTeacherStudent', 'addStudent', 'updateTeacherStudent', 'updateStudent', 'saveTeacherClass',
+                    'saveTeacherSettings', 'getTeacherSettings', 'getPengaturan', 'savePengaturan',
+                    'saveRoomLearningContent', 'saveStimulasiContent', 'saveStimulasiData', 'saveRuangBelajarData',
+                    'getStimulasiData', 'getRuangBelajarData', 'getStudentGroups',
+                    'saveTeacherEvaluation', 'getTeacherEvaluation', 'savePortfolioAssessment',
+                    'saveTeacherActivityAssessment', 'saveTeacherFinalCapaian', 'getTeacherFinalCapaian',
+                    'saveTeacherFeedback', 'getGuideResources', 'uploadGuideResource', 'updateGuideResource',
+                    'deleteGuideResource', 'getTeacherNotifications', 'markTeacherNotificationRead',
+                    'saveStudentGroups', 'getDashboardStats', 'getInitialAppData', 'saveRestrictionStatus',
+                    'getRestrictionStatus', 'getPublishedPengantar'
+                ];
                 const requestPayload = { ...payload };
                 if (protectedTeacherActions.includes(action) && state.teacherAuth && state.teacherAuth.token) {
                     requestPayload.teacherToken = state.teacherAuth.token;
+                }
+                const studentScopedActions = ['getPublishedPengantar', 'getStimulasiData', 'getRuangBelajarData', 'getRestrictionStatus'];
+                if (studentScopedActions.includes(action) && state.student && state.student.isLoggedIn && state.student.nisn) {
+                    requestPayload.nisn = requestPayload.nisn || state.student.nisn;
                 }
                 const requestOptions = {
                     method: 'POST',
@@ -2091,6 +2107,11 @@
                 state.teacherDataCache.submissions = {};
                 state.teacherDataCache.evaluations = {};
                 showModal('Kelas Tanggung Jawab Belum Diatur', res.message || 'Buka Pengaturan untuk memilih kelas.', 'warning');
+                return;
+            }
+            if (res && res.status === 'ownership_required') {
+                state.teacherDataCache = { students: [], submissions: {}, evaluations: {}, stimulasiResponses: [], portfolioAssessment: { observation: {}, self: {}, peer: {}, recap: {} } };
+                showModal('Daftar Murid Belum Ditautkan', res.message || 'Admin perlu menetapkan NISN murid pada akun guru ini di kolom TEACHER_NIP tab USERS.', 'warning');
                 return;
             }
             if(res && res.status === 'success' && res.students) {
@@ -2464,6 +2485,42 @@
             showModal("Lupa Password 🔑", "Silakan hubungi Tim Administrator SRL atau Kepala Sekolah untuk melakukan reset password akun Guru Anda.", "info");
         }
 
+        function resetTeacherWorkspaceForAccountChange() {
+            try { invalidateApiSessionCache(); } catch (e) {}
+            try { sessionStorage.removeItem('portalSrlPortfolioAssessment'); } catch (e) {}
+            state.teacherDataCache = {
+                students: [],
+                submissions: {},
+                evaluations: {},
+                stimulasiResponses: [],
+                portfolioAssessment: { observation: {}, self: {}, peer: {}, recap: {} }
+            };
+            state.teacher = {
+                currentMenu: 'beranda',
+                selectedStudentId: null,
+                selectedActId: 'act1',
+                searchQuery: '',
+                filterKelompok: 'all',
+                activityMenuOpen: false,
+                penilaianOpen: false
+            };
+            try { teacherNotificationsCache = []; } catch (e) {}
+            try { updateTeacherNotificationBadge(0); } catch (e) {}
+            try { if (typeof groupOptions !== 'undefined') groupOptions = []; } catch (e) {}
+            if (state.teacherSettings) {
+                state.teacherSettings.teacherDisplayName = '';
+                state.teacherSettings.teacherUsername = '';
+                state.teacherSettings.teacherClass = '';
+                state.teacherSettings.stimulasiVideo = '';
+                state.teacherSettings.stimulasiVideoPublished = false;
+                state.teacherSettings.stimulasiQuestions = [];
+                state.teacherSettings.roomReadings = [];
+                state.teacherSettings.roomVideos = [];
+                state.teacherSettings.roomVideoPublished = [];
+                state.teacherSettings.unlockedActivities = { act1: true, act2: true, act3: true, act4: true, act5: true };
+            }
+        }
+
         async function handleLoginGuru(e) {
             if (e) e.preventDefault();
             const usernameInput = document.getElementById('guru-username');
@@ -2480,6 +2537,7 @@
             const res = await apiCall('loginGuru', { user_id: username, username: username, password: pass });
 
             if (res && (res.success === true || res.status === 'success') && !res.fallback) {
+                resetTeacherWorkspaceForAccountChange();
                 state.teacherAuth = {
                     nip: String((res.data && (res.data.user_id || res.data.nip || res.data.email)) || res.user_id || username).trim(),
                     token: String(res.teacherToken || ''),
@@ -2625,6 +2683,9 @@
                 if (activeTeacherToken) apiCall('logoutTeacherSession', { teacherToken: activeTeacherToken }).catch(err => console.warn('Sesi server belum dapat ditutup:', err));
             } catch (e) {}
             clearPortalSession();
+            invalidateApiSessionCache();
+            state.teacherDataCache = { students: [], submissions: {}, evaluations: {}, stimulasiResponses: [], portfolioAssessment: { observation: {}, self: {}, peer: {}, recap: {} } };
+            try { sessionStorage.removeItem('portalSrlPortfolioAssessment'); } catch (e) {}
             if (teacherNotificationPollTimer) {
                 clearInterval(teacherNotificationPollTimer);
                 teacherNotificationPollTimer = null;
