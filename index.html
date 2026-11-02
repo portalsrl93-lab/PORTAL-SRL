@@ -1324,6 +1324,11 @@
                                 }
                             })()
                         ]);
+                        // Saat sesi dipulihkan setelah reload, muat ulang URL Stimulasi
+                        // dari backend agar kolom editor dan pratinjau tidak kosong.
+                        if (state.teacher.currentMenu === 'stimulasi') {
+                            await refreshStimulasiContent();
+                        }
                     } catch (e) { console.warn('Pemulihan data sesi guru tertunda:', e); }
                 });
                 return;
@@ -4419,11 +4424,19 @@ function renderStudentActivityForm(actId) {
                     return false;
                 }
                 if (!state.teacherSettings || typeof state.teacherSettings !== 'object') state.teacherSettings = {};
-                state.teacherSettings.stimulasiVideo = String(res.stimulasiVideo || '').trim();
-                const publishedValue = res.stimulasiVideoPublished;
-                state.teacherSettings.stimulasiVideoPublished =
-                    publishedValue === true || publishedValue === 1 ||
-                    String(publishedValue).trim().toLowerCase() === 'true';
+                const serverVideo = String(res.stimulasiVideo || '').trim();
+                const existingVideo = String(state.teacherSettings.stimulasiVideo || '').trim();
+                // Pada sesi Guru, respons kosong tidak boleh menghapus URL yang sudah tersimpan
+                // di state. URL server yang berisi tetap menjadi sumber utama dan memperbarui editor.
+                if (serverVideo || !existingVideo || !(state.teacherAuth && state.teacherAuth.token)) {
+                    state.teacherSettings.stimulasiVideo = serverVideo;
+                }
+                if (Object.prototype.hasOwnProperty.call(res, 'stimulasiVideoPublished')) {
+                    const publishedValue = res.stimulasiVideoPublished;
+                    state.teacherSettings.stimulasiVideoPublished =
+                        publishedValue === true || publishedValue === 1 ||
+                        String(publishedValue).trim().toLowerCase() === 'true';
+                }
                 if (Array.isArray(res.stimulasiQuestions)) state.teacherSettings.stimulasiQuestions = res.stimulasiQuestions;
 
                 // Jangan bergantung pada nama state.currentView yang bisa berbeda antar deployment.
