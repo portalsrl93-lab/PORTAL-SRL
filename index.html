@@ -7249,59 +7249,68 @@ function renderStudentActivityForm(actId) {
                     : { ...submission };
             const actId = String(state?.teacher?.currentMenu || submission.act_id || submission.actId || 'act1');
             const prefix = /^act[1-5]$/.test(actId) ? actId : 'act1';
-            const parseMaybeJSON = (value) => {
-                if (value && typeof value === 'object') return value;
-                if (typeof value !== 'string' || !value.trim()) return value;
-                try { return JSON.parse(value); } catch (_) { return value; }
+            const norm = key => String(key || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const parseDeep = value => {
+                let out = value;
+                for (let i=0; i<4 && typeof out === 'string'; i++) {
+                    const t=out.trim();
+                    if (!t) return '';
+                    try { out=JSON.parse(t); } catch (_) { break; }
+                }
+                return out;
             };
-            const pick = (...keys) => {
-                for (const key of keys) {
-                    const value = base[key];
-                    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+            const findValue = (...names) => {
+                for (const name of names) {
+                    const direct=base[name];
+                    if (direct !== undefined && direct !== null && String(direct).trim() !== '') return direct;
+                    const wanted=norm(name);
+                    const found=Object.entries(base).find(([k,v])=>norm(k)===wanted && v!==undefined && v!==null && String(v).trim()!=='');
+                    if (found) return found[1];
                 }
                 return '';
             };
-
-            // Menjembatani format respons getTeacherData() dari Code.gs
-            // (jawaban_1, lkpd_url, self, peer, refleksi) ke key tampilan aktivitas.
-            const a1 = pick('jawaban_1', 'JAWABAN_TEKS_1', `${prefix}_jawaban_1`);
-            const a2 = pick('jawaban_2', 'JAWABAN_TEKS_2', `${prefix}_jawaban_2`);
-            const lkpd = pick('lkpd_url', 'LINK_LKPD', 'link_lkpd', `${prefix}_lkpd_url`);
-            const photo = pick('photo_url', 'LINK_DOKUMENTASI', 'link_dokumentasi', `${prefix}_photo_url`);
-            const selfRaw = parseMaybeJSON(pick('self', 'SELF_ASSESSMENT', 'self_assessment', `${prefix}_self`));
-            const peerRaw = parseMaybeJSON(pick('peer', 'PEER_ASSESSMENT', 'peer_assessment', `${prefix}_peer`));
-            const reflectionRaw = parseMaybeJSON(pick('refleksi', 'REFLEKSI_MURID', 'refleksi_murid', `${prefix}_refleksi`));
-
-            if (a1) { base[`${prefix}_jawaban_1`] = a1; base[`${prefix}_identifikasi`] = a1; }
-            if (a2) { base[`${prefix}_jawaban_2`] = a2; base[`${prefix}_diskusi`] = a2; }
-            if (lkpd) base[`${prefix}_lkpd`] = lkpd;
-            if (photo) base[`${prefix}_dokumentasi`] = photo;
-            // Pertahankan jawaban asesmen sebagai objek agar label indikator dapat
-            // ditampilkan secara manusiawi, bukan sebagai teks JSON/kunci variabel.
-            const collectFlattened = (kind) => {
-                const result = {};
-                const re = new RegExp('^' + prefix + '_' + kind + '_(.+)$', 'i');
-                Object.entries(base).forEach(([key, value]) => {
-                    const match = key.match(re);
-                    if (match && value !== null && value !== undefined && String(value).trim() !== '') result[match[1]] = value;
+            const collectFlattened = kind => {
+                const result={};
+                const start=norm(`${prefix}_${kind}_`);
+                Object.entries(base).forEach(([key,value])=>{
+                    const nk=norm(key);
+                    if (nk.startsWith(start) && value!==null && value!==undefined && String(value).trim()!=='') {
+                        const label=nk.slice(start.length);
+                        if (label && !['json','assessment'].includes(label)) result[label]=parseDeep(value);
+                    }
                 });
                 return result;
             };
-            const selfObject = selfRaw && typeof selfRaw === 'object' && !Array.isArray(selfRaw) ? selfRaw : collectFlattened('self');
-            const peerObject = peerRaw && typeof peerRaw === 'object' && !Array.isArray(peerRaw) ? peerRaw : collectFlattened('peer');
-            if (Object.keys(selfObject).length) base[`${prefix}_self`] = selfObject;
-            else if (selfRaw) base[`${prefix}_self`] = selfRaw;
-            if (Object.keys(peerObject).length) {
-                const target = peerObject.teman_dinilai || peerObject.teman || peerObject.target || peerObject.peer_target || peerObject.nama_teman || '';
-                if (target) base[`${prefix}_peer_target`] = target;
-                delete peerObject.teman_dinilai; delete peerObject.teman; delete peerObject.target;
-                delete peerObject.peer_target; delete peerObject.nama_teman;
-                base[`${prefix}_peer`] = peerObject;
-            } else if (peerRaw) base[`${prefix}_peer`] = peerRaw;
-            if (reflectionRaw && typeof reflectionRaw === 'object') {
-                base[`${prefix}_refleksi`] = Object.entries(reflectionRaw).map(([k,v]) => `${k}: ${v}`).join('\n');
-            } else if (reflectionRaw) base[`${prefix}_refleksi`] = reflectionRaw;
 
+            const a1=findValue('jawaban_1','JAWABAN_TEKS_1',`${prefix}_jawaban_1`);
+            const a2=findValue('jawaban_2','JAWABAN_TEKS_2',`${prefix}_jawaban_2`);
+            const lkpd=findValue('lkpd_url','LINK_LKPD','link_lkpd',`${prefix}_lkpd_url`);
+            const photo=findValue('photo_url','LINK_DOKUMENTASI','link_dokumentasi',`${prefix}_photo_url`);
+            const selfRaw=parseDeep(findValue('self','SELF_ASSESSMENT','self_assessment',`${prefix}_self`,`${prefix}_self_assessment`));
+            const peerRaw=parseDeep(findValue('peer','PEER_ASSESSMENT','peer_assessment',`${prefix}_peer`,`${prefix}_peer_assessment`));
+            const reflectionRaw=parseDeep(findValue('refleksi','REFLEKSI_MURID','refleksi_murid',`${prefix}_refleksi`,`${prefix}_reflection`));
+
+            if (a1) { base[`${prefix}_jawaban_1`]=a1; base[`${prefix}_identifikasi`]=a1; }
+            if (a2) { base[`${prefix}_jawaban_2`]=a2; base[`${prefix}_diskusi`]=a2; }
+            if (lkpd) base[`${prefix}_lkpd`]=lkpd;
+            if (photo) base[`${prefix}_dokumentasi`]=photo;
+
+            const selfObject=selfRaw && typeof selfRaw==='object' && !Array.isArray(selfRaw) ? selfRaw : collectFlattened('self');
+            const peerObject=peerRaw && typeof peerRaw==='object' && !Array.isArray(peerRaw) ? peerRaw : collectFlattened('peer');
+            if (Object.keys(selfObject).length) base[`${prefix}_self`]=selfObject;
+            else if (selfRaw) base[`${prefix}_self`]=selfRaw;
+            if (Object.keys(peerObject).length) {
+                const target=peerObject.teman_dinilai||peerObject.teman||peerObject.target||peerObject.peer_target||peerObject.nama_teman||'';
+                if (target) base[`${prefix}_peer_target`]=target;
+                ['teman_dinilai','teman','target','peer_target','nama_teman'].forEach(k=>delete peerObject[k]);
+                base[`${prefix}_peer`]=peerObject;
+            } else if (peerRaw) base[`${prefix}_peer`]=peerRaw;
+
+            if (reflectionRaw && typeof reflectionRaw==='object' && !Array.isArray(reflectionRaw)) {
+                base[`${prefix}_refleksi`]=reflectionRaw;
+            } else if (reflectionRaw) {
+                base[`${prefix}_refleksi`]=reflectionRaw;
+            }
             return base;
         }
         function teacherEvidenceValue(value) {
@@ -7329,23 +7338,50 @@ function renderStudentActivityForm(actId) {
             return labels[normalized.replace(/ /g, '_')] || normalized.replace(/\b\w/g, ch => ch.toUpperCase()) || 'Indikator';
         }
         function teacherAssessmentDisplay(value, kind='self') {
-            let parsed = value;
-            if (typeof parsed === 'string') {
-                const raw = parsed.trim();
-                if (!raw) parsed = {};
-                else { try { parsed = JSON.parse(raw); } catch (_) {
-                    const pairs = raw.split(/\n|;|\|/).map(line => line.trim()).filter(Boolean).map(line => {
-                        const ix = line.indexOf(':');
-                        return ix > -1 ? [line.slice(0, ix).trim(), line.slice(ix + 1).trim()] : ['', line];
+            const parseDeep = input => {
+                let out=input;
+                for(let i=0;i<4 && typeof out==='string';i++){
+                    const raw=out.trim(); if(!raw) return '';
+                    try { out=JSON.parse(raw); } catch(_) { break; }
+                }
+                return out;
+            };
+            let parsed=parseDeep(value);
+            if(!parsed || typeof parsed!=='object') parsed={jawaban:parsed};
+            if(Array.isArray(parsed)) parsed=Object.fromEntries(parsed.map((v,i)=>[`indikator_${i+1}`,v]));
+            const flat=[];
+            const walk=(obj,path='')=>{
+                if(obj && typeof obj==='object' && !Array.isArray(obj)){
+                    Object.entries(obj).forEach(([k,v])=>{
+                        if(/target|teman_dinilai|nama_teman|peer_target/i.test(k)) return;
+                        walk(v,path?`${path}_${k}`:k);
                     });
-                    parsed = Object.fromEntries(pairs.filter(([k,v]) => v).map(([k,v], i) => [k || `jawaban_${i+1}`, v]));
-                }}
+                } else if(Array.isArray(obj)){
+                    obj.forEach((v,i)=>walk(v,`${path}_${i+1}`));
+                } else if(obj!==null && obj!==undefined && String(obj).trim()!==''){
+                    flat.push([path||'jawaban',String(obj)]);
+                }
+            };
+            walk(parsed);
+            if(!flat.length) return '<span class="text-[11px] text-slate-400">Belum diisi murid.</span>';
+            return `<div class="grid gap-2">${flat.map(([key,v])=>`<div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-100 bg-white px-3 py-2"><span class="text-xs font-semibold text-slate-700">${escapeHTML(teacherAssessmentHumanLabel(key))}</span><span class="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">${escapeHTML(v)}</span></div>`).join('')}</div>`;
+        }
+        function teacherReflectionDisplay(value) {
+            let parsed=value;
+            for(let i=0;i<4 && typeof parsed==='string';i++){
+                const raw=parsed.trim();
+                if(!raw) return '<span class="text-[11px] text-slate-400">Belum diisi murid.</span>';
+                try { parsed=JSON.parse(raw); } catch(_) { break; }
             }
-            if (!parsed || typeof parsed !== 'object') parsed = {jawaban: parsed};
-            if (Array.isArray(parsed)) parsed = Object.fromEntries(parsed.map((v,i)=>[`indikator_${i+1}`,v]));
-            const entries = Object.entries(parsed).filter(([key,v]) => !/target|teman_dinilai|nama_teman|peer_target/i.test(key) && v !== null && v !== undefined && String(v).trim() !== '');
-            if (!entries.length) return '<span class="text-[11px] text-slate-400">Belum diisi murid.</span>';
-            return `<div class="grid gap-2">${entries.map(([key,v]) => `<div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-100 bg-white px-3 py-2"><span class="text-xs font-semibold text-slate-700">${escapeHTML(teacherAssessmentHumanLabel(key))}</span><span class="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700">${escapeHTML(String(v))}</span></div>`).join('')}</div>`;
+            if(parsed && typeof parsed==='object' && !Array.isArray(parsed)) {
+                const entries=Object.entries(parsed).filter(([k,v])=>!/^act[1-5]_?refleksi$/i.test(k) && v!==null && v!==undefined && String(v).trim()!=='');
+                if(entries.length) return `<div class="grid gap-2">${entries.map(([key,val])=>`<div class="rounded-lg border border-slate-100 bg-white px-3 py-2"><div class="text-[11px] font-bold text-slate-500 mb-1">${escapeHTML(teacherAssessmentHumanLabel(key))}</div><div class="text-xs leading-relaxed text-slate-700 whitespace-pre-wrap">${escapeHTML(String(val))}</div></div>`).join('')}</div>`;
+            }
+            const text=String(parsed??'').trim();
+            if(!text) return '<span class="text-[11px] text-slate-400">Belum diisi murid.</span>';
+            const lines=text.split(/\n|;|\|/).map(x=>x.trim()).filter(Boolean);
+            if(lines.some(x=>x.includes(':'))) return `<div class="grid gap-2">${lines.map(line=>{const ix=line.indexOf(':');const k=ix>=0?line.slice(0,ix).trim():'Refleksi';const v=ix>=0?line.slice(ix+1).trim():line;return `<div class="rounded-lg border border-slate-100 bg-white px-3 py-2"><div class="text-[11px] font-bold text-slate-500 mb-1">${escapeHTML(teacherAssessmentHumanLabel(k))}</div><div class="text-xs text-slate-700 whitespace-pre-wrap">${escapeHTML(v)}</div></div>`;}).join('')}</div>`;
+            return `<p class="text-xs leading-relaxed text-slate-700 whitespace-pre-wrap">${escapeHTML(text)}</p>`;
         }
         function setTeacherActivityTab(tab) { teacherActivityState.tab=tab; renderTeacherBoard(); }
         function selectTeacherActivityStudent(id) { teacherActivityState.selectedStudentId=Number(id); state.teacher.selectedStudentId=Number(id); renderTeacherBoard(); }
@@ -7416,7 +7452,7 @@ function renderStudentActivityForm(actId) {
                 const value=answers[key];
                 const present=value!==undefined&&value!==null&&(typeof value==='object'?Object.keys(value).length>0:String(value).trim()!=='');
                 const assessmentKind=key.endsWith('_self')?'self':(key.endsWith('_peer')?'peer':'');
-                const rendered=present?(assessmentKind?teacherAssessmentDisplay(value,assessmentKind):teacherEvidenceValue(value)):'<span class="text-[11px] text-slate-400">Bukti belum tersedia pada data yang diterima.</span>';
+                const rendered=present?(assessmentKind?teacherAssessmentDisplay(value,assessmentKind):(key.endsWith('_refleksi')?teacherReflectionDisplay(value):teacherEvidenceValue(value))):'<span class="text-[11px] text-slate-400">Bukti belum tersedia pada data yang diterima.</span>';
                 return `<div class="rounded-xl border ${present?'border-emerald-100 bg-emerald-50/50':'border-slate-100 bg-slate-50'} p-3"><div class="flex items-start justify-between gap-2"><b class="text-xs">${label}</b><span class="shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${present?'bg-emerald-100 text-emerald-700':'bg-rose-100 text-rose-700'}">${present?'Terkumpul':'Belum dikumpulkan'}</span></div><div class="mt-2">${rendered}</div></div>`;
             }).join('');
             const rubricHTML=cfg.rubric.map((r,i)=>{
