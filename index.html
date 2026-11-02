@@ -1675,7 +1675,7 @@
             const isUnlocked = isActivity ? getActivityAccessState(id).allowed : checkSectionAccess(id);
             const isDone = !!state.student.progress[id];
 
-            let btnClass = "w-full flex items-center gap-3 p-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ";
+            let btnClass = "w-full flex items-center justify-start text-left gap-3 p-2.5 rounded-xl font-bold text-xs transition-all cursor-pointer ";
             if (!isUnlocked) btnClass += "text-slate-300 locked-item ";
             else if (isActive) btnClass += "bg-emerald-600 text-white shadow-md ";
             else if (isDone) btnClass += "bg-emerald-50 text-emerald-800 border border-emerald-200 ";
@@ -1689,7 +1689,7 @@
             return `
                 <button type="button" data-student-section="${safeId}" onclick="${clickHandler}" class="${btnClass}" aria-label="${label}">
                     <i class="fa-solid ${icon} w-4 text-center"></i>
-                    <span class="truncate">${label}</span>
+                    <span class="truncate flex-1 min-w-0 text-left">${label}</span>
                 </button>
             `;
         }
@@ -3213,7 +3213,7 @@
                         </h2>
 
                         <p class="text-xs sm:text-sm md:text-base lg:text-lg text-slate-700 mb-6 md:mb-8 font-extrabold max-w-xl mx-auto bg-white/90 backdrop-blur-md p-4 sm:p-5 md:p-6 rounded-2xl sm:rounded-3xl shadow-lg border border-emerald-100/80 leading-relaxed text-center">
-                            Level Up Dimulai! Selamat datang, Pejuang Lingkungan! Bersama PORTAL-SRL, mari tingkatkan kemampuan belajarmu, catat setiap aksi hijau, untuk menjaga bumi kita! 🚀🌱
+                            Perjalanan belajarmu dimulai! Selamat datang, pejuang lingkungan! Bersama PORTAL-SRL, mari tingkatkan kemampuan belajarmu dan catat setiap aksi hijau untuk menjaga bumi kita! 🚀🌱
                         </p>
 
                         <div class="flex flex-col sm:flex-row items-center justify-center gap-3 mt-5 px-3">
@@ -3401,7 +3401,7 @@
             const isUnlocked = isActivity ? getActivityAccessState(id).allowed : checkSectionAccess(id);
             const isDone = !!state.student.progress[id];
 
-            let btnClass = "w-full flex items-center gap-3 p-2.5 rounded-2xl font-bold text-xs transition-all cursor-pointer ";
+            let btnClass = "w-full flex items-center justify-start text-left gap-3 p-2.5 rounded-2xl font-bold text-xs transition-all cursor-pointer ";
             if (!isUnlocked) btnClass += "text-slate-300 locked-item ";
             else if (isActive) btnClass += "bg-emerald-600 text-white shadow-md ";
             else if (isDone) btnClass += "bg-emerald-50 text-emerald-800 border border-emerald-200 ";
@@ -3413,7 +3413,7 @@
             return `
                 <button type="button" data-student-section="${safeId}" onclick="${clickHandler}" class="${btnClass}" aria-label="${label}" ${(!isUnlocked && isActivity) ? 'title="Aktivitas sedang ditutup oleh guru"' : ''}>
                     <i class="fa-solid ${icon} text-sm"></i>
-                    <span class="text-xs line-clamp-1">${label}</span>
+                    <span class="text-xs line-clamp-1 flex-1 min-w-0 text-left">${label}</span>
                     ${lockIcon}
                 </button>
             `;
@@ -7700,5 +7700,47 @@ function renderStudentActivityForm(actId) {
 }
 </style>
 
+<style id="portal-srl-student-activity-left-align-validator">
+/* Perataan kiri khusus label Aktivitas 1-5 pada navigasi Portal Murid. */
+button[data-student-section^="act"] { text-align:left!important; justify-content:flex-start!important; }
+button[data-student-section^="act"] span { flex:1 1 auto!important; min-width:0!important; text-align:left!important; }
+</style>
+<script id="portal-srl-italicize-english-terms">
+(function () {
+  const TERMS = ['Self-Assessment','Peer Assessment','Teacher Feedback','Dashboard','Assessment','Feedback','Upload','Download','Preview','Submit','Login','Logout','Progress','Portfolio','Activity','Activities','Student','Teacher','Evidence','Reflection','Rubric','Score','Result','Setting','Settings','Profile','Report','Search','Filter','Group','Meeting','Content','File','Save','Cancel','Draft','Admin','Online'];
+  const pattern = new RegExp('(' + TERMS.sort((a,b) => b.length-a.length).map(x => x.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')).join('|') + ')', 'gi');
+  const SKIP = new Set(['SCRIPT','STYLE','TEXTAREA','INPUT','SELECT','OPTION','CODE','PRE','NOSCRIPT']);
+  function formatEnglishTerms(root) {
+    if (!root || !root.querySelectorAll) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent || SKIP.has(parent.tagName) || parent.closest('em,i,code,pre,script,style,textarea,input,select,option,noscript')) return NodeFilter.FILTER_REJECT;
+        pattern.lastIndex = 0;
+        return pattern.test(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      }
+    });
+    const nodes=[]; while(walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach(node => {
+      const value=node.nodeValue; pattern.lastIndex=0; const fragment=document.createDocumentFragment(); let last=0,match;
+      while((match=pattern.exec(value))!==null){
+        if(match.index>last) fragment.appendChild(document.createTextNode(value.slice(last,match.index)));
+        const em=document.createElement('em'); em.textContent=match[0]; fragment.appendChild(em); last=match.index+match[0].length;
+      }
+      if(last<value.length) fragment.appendChild(document.createTextNode(value.slice(last)));
+      node.parentNode.replaceChild(fragment,node);
+    });
+  }
+  function start(){
+    const root=document.getElementById('app')||document.body; if(!root) return; formatEnglishTerms(root);
+    const observer=new MutationObserver(records=>records.forEach(record=>record.addedNodes.forEach(node=>{
+      if(node.nodeType===Node.ELEMENT_NODE && !node.closest('em')) formatEnglishTerms(node);
+      else if(node.nodeType===Node.TEXT_NODE) formatEnglishTerms(node.parentElement);
+    })));
+    observer.observe(root,{childList:true,subtree:true});
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start,{once:true}); else start();
+})();
+</script>
 </body>
 </html>
