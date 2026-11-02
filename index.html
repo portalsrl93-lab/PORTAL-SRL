@@ -6066,10 +6066,20 @@ function renderStudentActivityForm(actId) {
         function teacherFeedbackEntries() {
             const rows=[];
             const saved=state.teacherDataCache.evaluations||{};
-            Object.values(saved).forEach(ev=>{
-                if(ev && (ev.note||ev.umpanBalik)) {
-                    const st=teacherActivityStudents().find(s=>Number(s.id)===Number(ev.studentId))||{id:ev.studentId,nisn:ev.nisn||'',nama:ev.nama||'Murid',kelas:ev.kelas||'',kelompok:'Belum Ada Kelompok'};
-                    rows.push({student:st,activity:{id:ev.actId||'act1',title:(teacherPortfolioActivities().find(a=>a.id===ev.actId)||{}).title||'Aktivitas'},source:'Guru',type:'Saran',value:String(ev.note||ev.umpanBalik),date:ev.updatedAt||''});
+            const flatEvaluations=[];
+            Object.keys(saved).forEach(key=>{
+                const value=saved[key];
+                if(value && typeof value==='object' && !Array.isArray(value)) {
+                    if(value.actId || value.act_id) flatEvaluations.push(value);
+                    else Object.values(value).forEach(ev=>{if(ev && typeof ev==='object') flatEvaluations.push(ev);});
+                }
+            });
+            flatEvaluations.forEach(ev=>{
+                if(ev && (ev.note||ev.observasi_guru||ev.feedback_guru||ev.umpanBalik)) {
+                    const st=teacherActivityStudents().find(s=>String(s.nisn||'')===String(ev.nisn||''))||teacherActivityStudents().find(s=>Number(s.id)===Number(ev.studentId))||{id:ev.studentId,nisn:ev.nisn||'',nama:ev.nama||'Murid',kelas:ev.kelas||'',kelompok:'Belum Ada Kelompok'};
+                    const activityId=ev.actId||ev.act_id||'act1';
+                    const note=ev.note||ev.umpanBalik||ev.feedback_guru||ev.observasi_guru;
+                    rows.push({student:st,activity:{id:activityId,title:(teacherPortfolioActivities().find(a=>a.id===activityId)||{}).title||'Aktivitas'},source:'Guru',type:'Saran',value:String(note),date:ev.updatedAt||ev.timestamp||''});
                 }
             });
             try { const local=JSON.parse(sessionStorage.getItem('portalSrlTeacherFeedback')||'[]'); local.forEach(e=>rows.push(e)); } catch(e) {}
@@ -7301,16 +7311,21 @@ function renderStudentActivityForm(actId) {
             if(Object.values(ratings).some(v=>!v)){showModal('Penilaian belum lengkap','Pilih tahap Berkembang, Cakap, atau Mahir untuk setiap subdimensi yang dinilai.','warning');return;}
             const note=document.getElementById('teacher-activity-note')?.value?.trim()||'';
             const followup=document.getElementById('teacher-activity-followup')?.value?.trim()||'';
-            const key=`${actId}_${student.id}`;
+            const key=`${String(student.nisn||'').trim()}_${actId}`;
             state.teacherDataCache.evaluations=state.teacherDataCache.evaluations||{};
-            state.teacherDataCache.evaluations[key]={actId,studentId:student.id,nama:student.nama,ratings,note,followup,updatedAt:new Date().toISOString()};
+            state.teacherDataCache.evaluations[String(student.nisn||'').trim()]=state.teacherDataCache.evaluations[String(student.nisn||'').trim()]||{};
+            state.teacherDataCache.evaluations[String(student.nisn||'').trim()][actId]={actId,nisn:student.nisn,studentId:student.id,nama:student.nama,ratings,note,followup,updatedAt:new Date().toISOString()};
             try { sessionStorage.setItem('portalSrlTeacherEvaluations',JSON.stringify(state.teacherDataCache.evaluations)); } catch(e) {}
-            apiCall('saveTeacherActivityAssessment',{act_id:actId,student_id:student.id,nisn:student.nisn,ratings,catatanGuru:note,tindakLanjut:followup}).then(res=>{
-                if(res && res.status==='success') showModal('Penilaian tersimpan','Penilaian guru berhasil disimpan ke Google Sheets.','success');
-                else showModal('Penilaian belum tersinkron',res?.message||'Periksa koneksi dan konfigurasi backend.','warning');
-                fetchTeacherBoardData().then(()=>renderTeacherBoard());
-            });
             renderTeacherBoard();
+            apiCall('saveTeacherActivityAssessment',{act_id:actId,student_id:student.id,nisn:student.nisn,ratings,catatanGuru:note,tindakLanjut:followup}).then(async res=>{
+                if(res && res.status==='success') {
+                    showModal('Penilaian tersimpan','Penilaian guru berhasil disimpan ke Google Sheets.','success');
+                    await fetchTeacherBoardData();
+                    renderTeacherBoard();
+                } else {
+                    showModal('Penilaian belum tersinkron',res?.message||'Periksa koneksi dan konfigurasi backend.','warning');
+                }
+            }).catch(err=>showModal('Penilaian belum tersinkron',err?.message||'Periksa koneksi dan konfigurasi backend.','warning'));
         }
         function exportTeacherActivity() {
             const cfg=teacherActivityConfig[state.teacher.currentMenu];
@@ -7345,8 +7360,10 @@ function renderStudentActivityForm(actId) {
             const selected=all.find(s=>s.id===Number(teacherActivityState.selectedStudentId))||shown[0]?.student||all[0]||{id:0,nama:'Belum ada murid',kelas:'-',kelompok:'-',nisn:''};
             const submission=teacherActivitySubmission(selected,actId);
             const answers=teacherActivityAnswers(submission);
-            const evaluationKey=`${actId}_${selected.id}`;
-            const savedEval=(state.teacherDataCache.evaluations||{})[evaluationKey]||{};
+            const evaluationKey=`${String(selected.nisn||'').trim()}_${actId}`;
+            const evaluationRoot=state.teacherDataCache.evaluations||{};
+            const savedRaw=(evaluationRoot[String(selected.nisn||'').trim()]||{})[actId]||evaluationRoot[evaluationKey]||evaluationRoot[`${actId}_${selected.id}`]||{};
+            const savedEval={...savedRaw,ratings:savedRaw.ratings||savedRaw.rubrik_penilaian||{},note:savedRaw.note||savedRaw.observasi_guru||savedRaw.feedback_guru||'',followup:savedRaw.followup||savedRaw.tindak_lanjut||''};
             const tabs=['Bukti Belajar',...(cfg.self?['Penilaian Diri']:[]),...(cfg.peer?['Penilaian Teman Sebaya']:[]),'Refleksi Murid','Catatan Guru'];
             const evidenceRows=cfg.evidence.map(([key,label])=>{
                 const value=answers[key];
