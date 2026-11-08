@@ -1697,6 +1697,7 @@
         const STUDENT_DRAFT_PREFIX = 'portalSrlStudentDraftV1:';
         const studentActivityServerLoads = new Set();
         const studentActivitySaveTimers = {};
+        const studentActivitySaveInFlight = {};
         function activityDraftKey(actId, userId = state.student?.nisn) {
             return `draft_srl_akt_${String(actId || '').replace('act','')}_${String(userId || '').trim()}`;
         }
@@ -1756,27 +1757,46 @@
             };
         }
         async function saveStudentActivityServer(actId, statusAksi = 'draf') {
+            if (studentActivitySaveInFlight[actId]) {
+                // Tunggu simpan sebelumnya, lalu susun payload terbaru agar perubahan
+                // yang terjadi selama antrean tidak tertimpa data yang lebih lama.
+                try { await studentActivitySaveInFlight[actId]; } catch (_) {}
+            }
             const payload = makeStudentActivityPayload(actId, statusAksi);
             if (!payload.idMurid) return { status: 'error', message: 'ID Murid tidak tersedia.' };
             persistActivityDraftLocal(actId);
-            const result = await apiCall('saveStudentActivity', payload);
-            if (!result || result.status !== 'success' || result.success === false) throw new Error(result?.message || 'Server belum mengonfirmasi penyimpanan aktivitas.');
-            return result;
+
+            const request = (async () => {
+                const result = await apiCall('saveStudentActivity', payload);
+                if (!result || result.status !== 'success' || result.success === false) {
+                    throw new Error(result?.message || 'Server belum mengonfirmasi penyimpanan aktivitas.');
+                }
+                return result;
+            })();
+            studentActivitySaveInFlight[actId] = request;
+            try {
+                return await request;
+            } finally {
+                if (studentActivitySaveInFlight[actId] === request) {
+                    delete studentActivitySaveInFlight[actId];
+                }
+            }
         }
         function scheduleStudentActivityAutosave(actId) {
             if (!/^act[1-5]$/.test(actId) || !state.student?.nisn) return;
+            if (studentActivitySubmitInFlight.has(actId)) return;
             persistActivityDraftLocal(actId);
             clearTimeout(studentActivitySaveTimers[actId]);
             studentActivitySaveTimers[actId] = setTimeout(async () => {
+                if (studentActivitySubmitInFlight.has(actId)) return;
                 try {
                     await saveStudentActivityServer(actId, 'draf');
                     setStudentDraftIndicator(actId, '✓ Draf tersimpan di perangkat dan tersinkron ke server', 'saved');
                 } catch (err) {
-                    // Local draft tetap menjadi salinan pemulihan ketika jaringan/server gagal.
                     setStudentDraftIndicator(actId, '✓ Draf tersimpan di perangkat; sinkronisasi server akan dicoba lagi saat ada perubahan', 'error');
                     console.warn('Autosave server aktivitas gagal:', err);
                 }
-            }, 1400);
+            }, 1600);
         }
         async function loadStudentActivityFromServer(actId) {
             const id = String(state.student?.nisn || '').trim();
@@ -2208,6 +2228,12 @@
         async function submitStudentActivity(actId) {
             if (!/^act[1-5]$/.test(actId) || studentActivitySubmitInFlight.has(actId)) return;
             studentActivitySubmitInFlight.add(actId);
+            // Hentikan autosave tertunda dan tunggu permintaan sebelumnya selesai.
+            // Ini mencegah autosave draf berjalan bersamaan dengan proses kirim tugas.
+            clearTimeout(studentActivitySaveTimers[actId]);
+            if (studentActivitySaveInFlight[actId]) {
+                try { await studentActivitySaveInFlight[actId]; } catch (_) {}
+            }
             const alreadyCompleted = state.student.progress[actId] === true;
             const answers = state.student.answers || {};
             let missingFields = [];
