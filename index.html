@@ -1564,6 +1564,18 @@
             renderStudentBoard();
         }
 
+        function renderTeacherMobileNavItem(key, label, icon) {
+            const isActive = state.teacher.currentMenu === key;
+            return `
+                <button type="button" data-teacher-menu="${key}"
+                    onclick="toggleMobileMenuDrawer(false); setTeacherMenu('${key}'); return false;"
+                    class="w-full text-left px-3 py-3 rounded-xl transition-all flex items-center gap-3 text-sm ${isActive ? 'bg-[#00a664] text-white font-bold shadow-sm' : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-800'}">
+                    <i class="fa-solid ${icon} w-5 text-center"></i>
+                    <span class="leading-tight">${label}</span>
+                </button>
+            `;
+        }
+
         function toggleMobileMenuDrawer(show, type = 'student') {
             const container = document.getElementById('mobile-menu-drawer');
             if(!show) {
@@ -1574,7 +1586,7 @@
             if(type === 'teacher') {
                 container.innerHTML = `
                     <div class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[180] flex justify-start animate-pop-in">
-                        <div class="w-4/5 max-w-xs bg-white h-full p-5 overflow-y-auto flex flex-col justify-between font-sans text-slate-700 shadow-2xl">
+                        <div class="w-4/5 max-w-xs bg-white h-[100dvh] max-h-[100dvh] p-5 overflow-y-auto overscroll-contain flex flex-col justify-between font-sans text-slate-700 shadow-2xl">
                             <div>
                                 <div class="flex items-center justify-between pb-4 mb-4 border-b">
                                     <div class="flex items-center gap-2">
@@ -1589,26 +1601,39 @@
                                     </button>
                                 </div>
 
-                                <nav class="space-y-1 text-xs font-semibold">
-                                    <button onclick="toggleMobileMenuDrawer(false); setTeacherMenu('beranda');" class="w-full text-left px-3 py-2.5 rounded-xl hover:bg-slate-100 flex items-center gap-2.5 text-slate-600">
-                                        <i class="fa-solid fa-house w-4 text-center"></i> Beranda
-                                    </button>
-                                    <button onclick="toggleMobileMenuDrawer(false); setTeacherMenu('data_murid');" class="w-full text-left px-3 py-2.5 rounded-xl hover:bg-slate-100 flex items-center gap-2.5 text-slate-600">
-                                        <i class="fa-solid fa-users w-4 text-center"></i> Data Murid
-                                    </button>
-                                    <button onclick="toggleMobileMenuDrawer(false); setTeacherMenu('kelola_kelas');" class="w-full text-left px-3 py-2.5 rounded-xl hover:bg-slate-100 flex items-center gap-2.5 text-slate-600">
-                                        <i class="fa-solid fa-chalkboard w-4 text-center"></i> Kelola Kelas
-                                    </button>
-                                    <button onclick="toggleMobileMenuDrawer(false); setTeacherMenu('pengantar_topik');" class="w-full text-left px-3 py-2.5 rounded-xl hover:bg-slate-100 text-slate-600 flex items-center gap-2.5">
-                                        <i class="fa-solid fa-file-lines w-4 text-center"></i> Pengantar Topik
-                                    </button>
-                                    <button onclick="toggleMobileMenuDrawer(false); setTeacherMenu('stimulasi');" class="w-full text-left px-3 py-2.5 rounded-xl hover:bg-slate-100 flex items-center gap-2.5 text-slate-600">
-                                        <i class="fa-solid fa-lightbulb w-4 text-center"></i> Stimulasi
-                                    </button>
+                                <nav class="space-y-1 text-sm font-semibold pb-4" aria-label="Navigasi Portal Guru">
+                                    <p class="px-3 pt-1 pb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">Menu Utama</p>
+                                    ${renderTeacherMobileNavItem('beranda', 'Beranda', 'fa-house')}
+                                    ${renderTeacherMobileNavItem('data_murid', 'Data Murid', 'fa-users')}
+                                    ${renderTeacherMobileNavItem('kelola_kelas', 'Kelola Kelas', 'fa-chalkboard')}
+                                    ${renderTeacherMobileNavItem('pengantar_topik', 'Pengantar Topik', 'fa-file-lines')}
+                                    ${renderTeacherMobileNavItem('stimulasi', 'Stimulasi', 'fa-lightbulb')}
+
+                                    <div class="px-3 pt-4 pb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">Aktivitas Murid</div>
+                                    ${renderTeacherMobileNavItem('act1', 'Aktivitas 1', 'fa-leaf')}
+                                    ${renderTeacherMobileNavItem('act2', 'Aktivitas 2', 'fa-triangle-exclamation')}
+                                    ${renderTeacherMobileNavItem('act3', 'Aktivitas 3', 'fa-boxes-stacked')}
+                                    ${renderTeacherMobileNavItem('act4', 'Aktivitas 4', 'fa-recycle')}
+                                    ${renderTeacherMobileNavItem('act5', 'Aktivitas 5', 'fa-calendar-check')}
+
+                                    <div class="px-3 pt-4 pb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">Portofolio dan Penilaian</div>
+                                    ${renderTeacherMobileNavItem('bukti_karya', 'Bukti Karya', 'fa-folder-open')}
+                                    ${renderTeacherMobileNavItem('refleksi_murid', 'Refleksi Murid', 'fa-comments')}
+                                    ${renderTeacherMobileNavItem('umpan_balik', 'Umpan Balik', 'fa-message')}
+                                    ${renderTeacherMobileNavItem('penilaian_observasi', 'Observasi Guru', 'fa-clipboard-check')}
+                                    ${renderTeacherMobileNavItem('penilaian_diri', 'Penilaian Diri Murid', 'fa-user-check')}
+                                    ${renderTeacherMobileNavItem('penilaian_sebaya', 'Penilaian Teman Sebaya', 'fa-people-arrows-left-right')}
+                                    ${renderTeacherMobileNavItem('penilaian_subdimensi', 'Rekap Subdimensi APK', 'fa-chart-column')}
+
+                                    <div class="px-3 pt-4 pb-2 text-[10px] font-black uppercase tracking-wider text-slate-400">Pengelolaan Portal</div>
+                                    ${renderTeacherMobileNavItem('ruang_belajar_editor', 'Kelola Ruang Belajar', 'fa-book-open-reader')}
+                                    ${renderTeacherMobileNavItem('laporan', 'Laporan', 'fa-file-pdf')}
+                                    ${renderTeacherMobileNavItem('panduan', 'Panduan', 'fa-book')}
+                                    ${renderTeacherMobileNavItem('pengaturan', 'Pengaturan', 'fa-gear')}
                                 </nav>
                             </div>
 
-                            <div class="pt-4 border-t border-slate-200 space-y-2 mt-4">
+                            <div class="pt-4 border-t border-slate-200 space-y-2 mt-4 shrink-0 bg-white">
                                 <button onclick="toggleMobileMenuDrawer(false); logout();" class="w-full text-xs font-bold text-rose-600 p-2 text-left hover:text-rose-700 flex items-center gap-2">
                                     <i class="fa-solid fa-sign-out-alt"></i> Keluar Portal Guru
                                 </button>
