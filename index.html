@@ -1778,7 +1778,12 @@
                 kelompok: state.student?.kelompok || state.student?.group || '', noAktivitas: actId,
                 jawabanPemantik: prompts, refleksiDiri: reflections,
                 urlLkpd: String(answers[`${actId}_lkpd_url`] || ''),
-                urlDokumentasi: String(answers[`${actId}_photo_url`] || ''), statusAksi
+                urlDokumentasi: String(answers[`${actId}_photo_url`] || ''),
+                urlLkpdFiles: parseStudentEvidenceList(answers[`${actId}_lkpd_urls`] || answers[`${actId}_lkpd_url`]),
+                urlDokumentasiFiles: parseStudentEvidenceList(answers[`${actId}_photo_urls`] || answers[`${actId}_photo_url`]),
+                lkpdFileNames: Array.isArray(answers[`${actId}_lkpd_filenames`]) ? answers[`${actId}_lkpd_filenames`] : [],
+                photoFileNames: Array.isArray(answers[`${actId}_photo_filenames`]) ? answers[`${actId}_photo_filenames`] : [],
+                statusAksi
             };
         }
         async function saveStudentActivityServer(actId, statusAksi = 'draf') {
@@ -1847,6 +1852,10 @@
                     });
                     if (serverData.urlLkpd) state.student.answers[`${actId}_lkpd_url`] = serverData.urlLkpd;
                     if (serverData.urlDokumentasi) state.student.answers[`${actId}_photo_url`] = serverData.urlDokumentasi;
+                    if (serverData.urlLkpdFiles) state.student.answers[`${actId}_lkpd_urls`] = parseStudentEvidenceList(serverData.urlLkpdFiles);
+                    if (serverData.urlDokumentasiFiles) state.student.answers[`${actId}_photo_urls`] = parseStudentEvidenceList(serverData.urlDokumentasiFiles);
+                    if (serverData.lkpdFileNames) state.student.answers[`${actId}_lkpd_filenames`] = parseStudentEvidenceList(serverData.lkpdFileNames);
+                    if (serverData.photoFileNames) state.student.answers[`${actId}_photo_filenames`] = parseStudentEvidenceList(serverData.photoFileNames);
                     state.student.progress[actId] = state.student.progress[actId] === true ||
                         String(serverData.statusAksi || '').toLowerCase() === 'selesai';
                 }
@@ -2202,34 +2211,69 @@
             });
         }
 
+        async function compressStudentImage(file) {
+            if (!file || !/^image\//i.test(file.type || '') || file.size <= 2 * 1024 * 1024) return file;
+            if (typeof createImageBitmap !== 'function') return file;
+            let bitmap = null;
+            try {
+                bitmap = await createImageBitmap(file);
+                const maxSide = 1800;
+                const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+                canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+                const ctx = canvas.getContext('2d');
+                if (!ctx) return file;
+                ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+                const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.78));
+                if (!blob) return file;
+                const baseName = String(file.name || 'foto').replace(/\.[^.]+$/, '');
+                return new File([blob], `${baseName}.jpg`, { type:'image/jpeg', lastModified:Date.now() });
+            } catch (err) {
+                console.warn('Kompresi foto tidak tersedia, gunakan berkas asli:', err);
+                return file;
+            } finally {
+                if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+            }
+        }
+
         async function uploadStudentEvidence(actId, kind, file) {
-            const base64 = await readFileAsBase64(file);
+            const uploadFile = await compressStudentImage(file);
+            if (uploadFile.size > 2 * 1024 * 1024) {
+                throw new Error(`Ukuran ${file.name} masih lebih dari 2 MB setelah kompresi. Silakan pilih foto dengan ukuran lebih kecil.`);
+            }
+            const base64 = await readFileAsBase64(uploadFile);
             const result = await apiCall('uploadStudentFile', {
                 nisn: state.student.nisn,
                 nama: state.student.name || '',
                 kelas: state.student.kelas || '',
                 act_id: actId,
                 file_kind: kind,
-                file_name: file.name,
-                mime_type: file.type || (kind === 'lkpd' && /\.pdf$/i.test(file.name) ? 'application/pdf' : 'application/octet-stream'),
+                append_mode: true,
+                file_name: uploadFile.name,
+                mime_type: uploadFile.type || (kind === 'lkpd' && /\.pdf$/i.test(uploadFile.name) ? 'application/pdf' : 'application/octet-stream'),
                 file_base64: base64
             });
             if (!result || result.status !== 'success' || !result.url) {
                 throw new Error(result?.message || `Berkas ${kind} gagal diunggah ke Google Drive.`);
             }
             const urlKey = `${actId}_${kind}_url`;
+            const urlsKey = `${actId}_${kind}_urls`;
             const filenameKey = `${actId}_${kind}_filename`;
-            state.student.answers[urlKey] = result.url;
-            state.student.answers[filenameKey] = result.fileName || file.name;
+            const filenamesKey = `${actId}_${kind}_filenames`;
+            const urls = Array.isArray(result.urls) ? result.urls : [...(Array.isArray(state.student.answers[urlsKey]) ? state.student.answers[urlsKey] : []), result.url];
+            const names = Array.isArray(result.fileNames) ? result.fileNames : [...(Array.isArray(state.student.answers[filenamesKey]) ? state.student.answers[filenamesKey] : []), result.fileName || file.name];
+            state.student.answers[urlsKey] = urls;
+            state.student.answers[filenamesKey] = names;
+            state.student.answers[urlKey] = urls[0] || result.url; // URL tunggal tetap disediakan untuk kompatibilitas data lama.
+            state.student.answers[filenameKey] = names.join(', ');
             persistStudentDraft();
             persistActivityDraftLocal(actId);
-            // Backend juga menyimpan URL upload secara langsung; sinkronisasi ini
-            // memastikan seluruh jawaban frontend ikut tercatat pada record aktivitas yang sama.
             const activitySave = await saveStudentActivityServer(actId, 'draf');
             if (!activitySave || activitySave.status !== 'success') {
                 throw new Error(activitySave?.message || 'URL berkas terunggah, tetapi belum tersinkron ke record aktivitas.');
             }
-            return result;
+            return { ...result, urls, fileNames: names };
         }
 
         async function saveStudentActivityDraft(actId) {
@@ -2264,8 +2308,8 @@
             let missingFields = [];
 
             const cfg = studentAPKItems[actId];
-            if (!answers[`${actId}_lkpd_filename`]) missingFields.push('Berkas hasil LKPD (foto atau PDF)');
-            if (!answers[`${actId}_photo_filename`]) missingFields.push('Foto dokumentasi kegiatan');
+            if (!answers[`${actId}_lkpd_filename`] && !parseStudentEvidenceList(answers[`${actId}_lkpd_urls`] || answers[`${actId}_lkpd_url`]).length && !(studentSelectedFiles[`${actId}_lkpd`] || []).length) missingFields.push('Berkas hasil LKPD (foto atau PDF)');
+            if (!answers[`${actId}_photo_filename`] && !parseStudentEvidenceList(answers[`${actId}_photo_urls`] || answers[`${actId}_photo_url`]).length && !(studentSelectedFiles[`${actId}_photo`] || []).length) missingFields.push('Foto dokumentasi kegiatan');
             if (!String(answers[`${actId}_refleksi_baik`] || '').trim()) missingFields.push('Refleksi: hal yang sudah dilakukan dengan baik');
             if (!String(answers[`${actId}_refleksi_perbaiki`] || '').trim()) missingFields.push('Refleksi: hal yang masih perlu diperbaiki');
             if (!String(answers[`${actId}_kebiasaan_lanjut`] || '').trim()) missingFields.push('Kebiasaan baik setelah kegiatan');
@@ -2294,17 +2338,30 @@
             let uploads = {};
             try {
                 for (const kind of ['lkpd', 'photo']) {
-                    const file = studentSelectedFiles[`${actId}_${kind}`];
-                    if (file) {
-                        setStudentDraftIndicator(actId, `⏳ Mengunggah ${kind === 'lkpd' ? 'LKPD' : 'foto dokumentasi'} ke Google Drive…`, 'uploading');
+                    const pendingFiles = (studentSelectedFiles[`${actId}_${kind}`] || []).slice();
+                    let urls = parseStudentEvidenceList(submittedAnswers[`${actId}_${kind}_urls`] || submittedAnswers[`${actId}_${kind}_url`]);
+                    let names = Array.isArray(submittedAnswers[`${actId}_${kind}_filenames`])
+                        ? submittedAnswers[`${actId}_${kind}_filenames`].slice()
+                        : (submittedAnswers[`${actId}_${kind}_filename`] ? [submittedAnswers[`${actId}_${kind}_filename`]] : []);
+                    for (const file of pendingFiles) {
+                        setStudentDraftIndicator(actId, `⏳ Mengunggah ${kind === 'lkpd' ? 'LKPD' : 'foto dokumentasi'} (${urls.length + 1}) ke Google Drive…`, 'uploading');
                         const uploaded = await uploadStudentEvidence(actId, kind, file);
-                        setStudentDraftIndicator(actId, `✓ ${kind === 'lkpd' ? 'LKPD' : 'Foto dokumentasi'} berhasil diunggah`, 'saved');
-                        uploads[kind] = { url: uploaded.url, fileId: uploaded.fileId || '', fileName: uploaded.fileName || file.name };
-                        submittedAnswers[`${actId}_${kind}_url`] = uploaded.url;
-                        submittedAnswers[`${actId}_${kind}_filename`] = uploaded.fileName || file.name;
-                    } else if (!submittedAnswers[`${actId}_${kind}_url`]) {
-                        throw new Error(`Pilih kembali file ${kind === 'lkpd' ? 'LKPD' : 'dokumentasi'} sebelum mengirim. File yang hanya tersimpan sebagai draft lokal belum ada di Google Drive.`);
+                        urls = Array.isArray(uploaded.urls) ? uploaded.urls : [...urls, uploaded.url];
+                        names = Array.isArray(uploaded.fileNames) ? uploaded.fileNames : [...names, uploaded.fileName || file.name];
+                        const pendingQueue = studentSelectedFiles[`${actId}_${kind}`] || [];
+                        const pendingIndex = pendingQueue.findIndex(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified);
+                        if (pendingIndex >= 0) pendingQueue.splice(pendingIndex, 1);
+                        refreshStudentEvidenceQueueUI(actId, kind);
                     }
+                    if (!urls.length) {
+                        throw new Error(`Tambahkan minimal satu berkas ${kind === 'lkpd' ? 'LKPD' : 'foto dokumentasi'} sebelum mengirim tugas.`);
+                    }
+                    submittedAnswers[`${actId}_${kind}_urls`] = urls;
+                    submittedAnswers[`${actId}_${kind}_filenames`] = names;
+                    submittedAnswers[`${actId}_${kind}_url`] = urls[0];
+                    submittedAnswers[`${actId}_${kind}_filename`] = names.join(', ');
+                    uploads[kind] = { url: urls[0], urls, fileName: names[0] || '', fileNames: names };
+                    setStudentDraftIndicator(actId, `✓ ${kind === 'lkpd' ? 'LKPD' : 'Foto dokumentasi'}: ${urls.length} berkas siap dikirim`, 'saved');
                 }
             } catch (uploadError) {
                 persistStudentDraft();
@@ -2343,8 +2400,8 @@
             }
             const activityDraftCleared = clearStudentDraftIfUnchanged(state.student.nisn, submittedAnswers, actId);
             clearActivityDraftLocal(actId, state.student.nisn);
-            delete studentSelectedFiles[`${actId}_lkpd`];
-            delete studentSelectedFiles[`${actId}_photo`];
+            studentSelectedFiles[`${actId}_lkpd`] = [];
+            studentSelectedFiles[`${actId}_photo`] = [];
 
             const totalStars = Number.isFinite(Number(saveResult.completed_activities)) ? Number(saveResult.completed_activities) : ['act1','act2','act3','act4','act5'].filter(id => state.student.progress[id] === true).length;
             const newlyCompleted = typeof saveResult.newly_completed === 'boolean' ? saveResult.newly_completed : !alreadyCompleted;
@@ -3809,50 +3866,91 @@
             `;
         }
 
-        const studentSelectedFiles = {};
+        const studentSelectedFiles = {}; // Antrean beberapa lampiran per aktivitas dan jenis bukti.
+
+        function parseStudentEvidenceList(value) {
+            if (Array.isArray(value)) return value.map(v => String(v || '').trim()).filter(Boolean);
+            if (value && typeof value === 'object') return [];
+            const raw = String(value || '').trim();
+            if (!raw) return [];
+            try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) return parsed.map(v => String(v || '').trim()).filter(Boolean);
+            } catch (_) {}
+            return [raw]; // Kompatibilitas tautan tunggal dari versi portal sebelumnya.
+        }
+
+        function renderStudentEvidenceQueue(actId, kind) {
+            const answers = state.student.answers || {};
+            const savedUrls = parseStudentEvidenceList(answers[`${actId}_${kind}_urls`] || answers[`${actId}_${kind}_url`]);
+            const savedNames = parseStudentEvidenceList(answers[`${actId}_${kind}_filenames`]);
+            const pending = studentSelectedFiles[`${actId}_${kind}`] || [];
+            const isPhoto = kind === 'photo';
+            const rowBg = isPhoto ? '#ecfdf5' : '#eff6ff';
+            const rowText = isPhoto ? '#047857' : '#1d4ed8';
+            const savedHTML = savedUrls.map((url, i) => `<div class="flex items-center justify-between gap-2 rounded-lg px-3 py-2" style="background:${rowBg}"><a href="${escapeHTML(url)}" target="_blank" rel="noopener" class="min-w-0 break-all text-xs font-bold underline" style="color:${rowText}">${escapeHTML(savedNames[i] || `${isPhoto ? 'Foto' : 'LKPD'} tersimpan ${i+1}`)}</a><span class="shrink-0 text-[10px] font-bold text-emerald-700">Tersimpan</span></div>`).join('');
+            const pendingHTML = pending.map((file, i) => `<div class="flex items-center justify-between gap-2 rounded-lg bg-amber-50 px-3 py-2"><span class="min-w-0 break-all text-xs font-semibold text-amber-800">${escapeHTML(file.name)}</span><button type="button" onclick="removeStudentPendingFile('${actId}','${kind}',${i})" class="shrink-0 rounded-lg px-2 py-1 text-xs font-black text-rose-600" aria-label="Hapus lampiran ${escapeHTML(file.name)}"><i class="fa-solid fa-trash"></i></button></div>`).join('');
+            const savedCount = savedUrls.length;
+            const pendingCount = pending.length;
+            const savedLabel = savedCount ? `${savedCount} berkas sudah tersimpan` : 'Belum ada berkas tersimpan';
+            const pendingLabel = pendingCount ? `${pendingCount} berkas menunggu dikirim` : 'Belum ada berkas baru dipilih';
+            return `<div id="${actId}-${kind}-preview" class="mt-2 space-y-2">
+                <p class="text-xs font-bold text-slate-600">${savedLabel} · ${pendingLabel}</p>
+                ${savedHTML}${pendingHTML}
+            </div>`;
+        }
+
+        function refreshStudentEvidenceQueueUI(actId, kind) {
+            const box = document.getElementById(`${actId}-${kind}-preview`);
+            if (box) {
+                const wrapper = document.createElement('div');
+                wrapper.innerHTML = renderStudentEvidenceQueue(actId, kind);
+                const replacement = wrapper.firstElementChild;
+                if (replacement) box.replaceWith(replacement);
+            }
+            const name = document.getElementById(`${actId}-${kind}-file-name`);
+            if (name) {
+                const pending = studentSelectedFiles[`${actId}_${kind}`] || [];
+                name.textContent = pending.length ? `${pending.length} berkas baru dipilih` : 'Pilih kamera atau berkas dari perangkat';
+            }
+        }
+
+        function removeStudentPendingFile(actId, kind, index) {
+            const key = `${actId}_${kind}`;
+            const files = studentSelectedFiles[key] || [];
+            if (index < 0 || index >= files.length) return;
+            files.splice(index, 1);
+            studentSelectedFiles[key] = files;
+            refreshStudentEvidenceQueueUI(actId, kind);
+        }
 
         function handleStudentActivityFile(actId, input) {
-            const file = input && input.files && input.files[0];
-            if (!file) return;
-            const isPhoto = input.dataset.kind === 'photo';
-            const allowed = isPhoto ? (file.type.startsWith('image/') || /\.(jpg|jpeg|png|webp)$/i.test(file.name)) : (file.type.startsWith('image/') || ['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(file.type) || /\.(pdf|doc|docx|jpg|jpeg|png|webp)$/i.test(file.name));
-            if (!allowed) {
-                showModal('Format File Belum Sesuai', isPhoto ? 'Pilih berkas foto/gambar untuk dokumentasi kegiatan.' : 'Pilih PDF, DOC, DOCX, JPG, atau PNG untuk bukti LKPD.', 'warning');
-                input.value = '';
-                return;
-            }
-            const maxBytes = 2 * 1024 * 1024; // Maksimal 2 MB per berkas untuk menjaga kestabilan permintaan Apps Script.
-            if (file.size > maxBytes) {
-                showModal('Ukuran File Terlalu Besar', 'Pilih file maksimal 2 MB. Untuk foto, kecilkan/kompres gambar terlebih dahulu.', 'warning');
-                input.value = '';
-                return;
-            }
-            const kind = isPhoto ? 'photo' : 'lkpd';
-            const key = isPhoto ? `${actId}_photo_filename` : `${actId}_lkpd_filename`;
-            const labelId = isPhoto ? `${actId}-photo-file-name` : `${actId}-lkpd-file-name`;
-            studentSelectedFiles[`${actId}_${kind}`] = file;
-            updateStudentAnswerLocally(key, file.name);
-            const label = document.getElementById(labelId);
-            if (label) label.textContent = file.name;
-            // Unggah segera setelah pemilihan; URL Drive langsung dipersistensikan pada record aktivitas.
-            (async () => {
-                try {
-                    setStudentDraftIndicator(actId, `⏳ Mengunggah ${kind === 'lkpd' ? 'LKPD' : 'foto dokumentasi'} ke Google Drive…`, 'uploading');
-                    const uploaded = await uploadStudentEvidence(actId, kind, file);
-                    state.student.answers[`${actId}_${kind}_url`] = uploaded.fileUrl || uploaded.url;
-                    state.student.answers[`${actId}_${kind}_filename`] = uploaded.fileName || file.name;
-                    delete studentSelectedFiles[`${actId}_${kind}`];
-                    persistStudentDraft();
-                    persistActivityDraftLocal(actId);
-                    await saveStudentActivityServer(actId, 'draf');
-                    setStudentDraftIndicator(actId, `✓ ${kind === 'lkpd' ? 'LKPD' : 'Foto dokumentasi'} tersimpan di Drive dan tautannya dicatat di Sheets`, 'saved');
-                    const preview = document.getElementById(`${actId}-${kind}-preview`);
-                    if (preview) preview.innerHTML = `<a href="${escapeHTML(uploaded.fileUrl || uploaded.url)}" target="_blank" rel="noopener" class="text-sm font-bold text-blue-700 underline">Lihat berkas yang diunggah</a>`;
-                } catch (err) {
-                    setStudentDraftIndicator(actId, '⚠ Upload belum berhasil. Draf jawaban tetap tersimpan lokal.', 'error');
-                    showModal('Unggah Belum Berhasil', escapeHTML(err.message || 'Berkas belum berhasil diunggah.'), 'error');
+            const selected = Array.from(input?.files || []);
+            if (!selected.length) return;
+            const kind = input.dataset.kind || (input.id.includes('photo') ? 'photo' : 'lkpd');
+            const isPhoto = kind === 'photo';
+            const key = `${actId}_${kind}`;
+            if (!Array.isArray(studentSelectedFiles[key])) studentSelectedFiles[key] = [];
+            for (const file of selected) {
+                const allowed = isPhoto
+                    ? (file.type.startsWith('image/') || /\.(jpg|jpeg|png|webp)$/i.test(file.name))
+                    : (file.type.startsWith('image/') || ['application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(file.type) || /\.(pdf|doc|docx|jpg|jpeg|png|webp)$/i.test(file.name));
+                if (!allowed) {
+                    showModal('Format File Belum Sesuai', isPhoto ? 'Pilih berkas foto/gambar untuk dokumentasi kegiatan.' : 'Pilih PDF, DOC, DOCX, JPG, atau PNG untuk bukti LKPD.', 'warning');
+                    continue;
                 }
-            })();
+                const maxBytes = 2 * 1024 * 1024;
+                if (file.size > maxBytes && !/^image\//i.test(file.type || '')) {
+                    showModal('Ukuran File Terlalu Besar', `File ${escapeHTML(file.name)} melebihi 2 MB. Pilih dokumen yang lebih kecil.`, 'warning');
+                    continue;
+                }
+                const duplicate = studentSelectedFiles[key].some(f => f.name === file.name && f.size === file.size && f.lastModified === file.lastModified);
+                if (!duplicate) studentSelectedFiles[key].push(file);
+            }
+            input.value = '';
+            refreshStudentEvidenceQueueUI(actId, kind);
+            updateStudentAnswerLocally(`${actId}_${kind}_filename`, (studentSelectedFiles[key] || []).map(f => f.name).join(', '));
+            setStudentDraftIndicator(actId, '✓ Lampiran dipilih. Tekan Kirim Tugas setelah semua berkas siap.', 'saved');
         }
 
         // Instrumen murid mengikuti kisi-kisi Telaah Materi Topik 2:
@@ -4074,15 +4172,51 @@
             updateStudentAnswerLocally(`${actId}_${kind}`, JSON.stringify(aggregate));
         }
 
-function renderStudentActivityForm(actId) {
+function renderStudentEvidenceUploader(actId, kind, stepNumber) {
+            const isPhoto = kind === 'photo';
+            const title = isPhoto ? 'Foto Dokumentasi Kegiatan' : 'Unggah Hasil LKPD';
+            const instruction = isPhoto
+                ? 'Ambil foto langsung atau pilih beberapa foto dari galeri HP.'
+                : 'Foto setiap lembar LKPD atau pilih dokumen PDF/DOC dari perangkatmu.';
+            const accept = isPhoto ? 'image/*' : 'image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+            const color = isPhoto ? '#059669' : '#2563eb';
+            const border = isPhoto ? '#a7f3d0' : '#bfdbfe';
+            const background = isPhoto ? 'linear-gradient(110deg,#ecfdf5,#ffffff)' : 'linear-gradient(110deg,#eaf4ff,#ffffff)';
+            const icon = isPhoto ? 'fa-camera' : 'fa-file-pen';
+            return `<section class="activity-step-card" style="background:${background};border-color:${border}">
+                <div class="flex h-12 w-12 items-center justify-center rounded-full text-xl font-black text-white" style="background:${color}">${stepNumber}</div>
+                <div class="flex h-14 w-14 items-center justify-center text-4xl" style="color:${color}"><i class="fa-solid ${icon}"></i></div>
+                <div class="min-w-0 w-full space-y-2">
+                    <h3 class="text-lg font-black text-slate-950">${title}</h3>
+                    <p class="text-sm text-slate-700">${instruction}</p>
+                    <p id="${actId}-${kind}-file-name" class="text-xs text-slate-500">Pilih kamera atau berkas dari perangkat</p>
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="document.getElementById('${actId}-${kind}-camera').click()" class="rounded-xl border-2 bg-white px-4 py-2.5 text-xs font-black" style="border-color:${color};color:${color}">
+                            <i class="fa-solid fa-camera mr-2"></i>Ambil Foto
+                        </button>
+                        <button type="button" onclick="document.getElementById('${actId}-${kind}-picker').click()" class="rounded-xl border-2 bg-white px-4 py-2.5 text-xs font-black" style="border-color:${color};color:${color}">
+                            <i class="fa-solid fa-folder-open mr-2"></i>${isPhoto ? 'Tambah Foto dari Galeri' : 'Tambah Foto / Dokumen'}
+                        </button>
+                    </div>
+                    <input id="${actId}-${kind}-camera" data-kind="${kind}" type="file" accept="image/*" capture="environment" class="hidden" onchange="handleStudentActivityFile('${actId}',this)">
+                    <input id="${actId}-${kind}-picker" data-kind="${kind}" type="file" accept="${accept}" multiple class="hidden" onchange="handleStudentActivityFile('${actId}',this)">
+                    ${renderStudentEvidenceQueue(actId, kind)}
+                    <p class="text-[11px] text-slate-500">${isPhoto ? 'Format foto: JPG, PNG, atau WEBP. Maksimal 2 MB per foto.' : 'Format: PDF, DOC, DOCX, JPG, PNG, atau WEBP. Maksimal 2 MB per berkas.'}</p>
+                </div>
+            </section>`;
+        }
+
+        function renderStudentActivityForm(actId) {
             const cfg = studentAPKItems[actId];
             const answers = state.student.answers || {};
             const fileName = answers[`${actId}_lkpd_filename`] || '';
             const photoName = answers[`${actId}_photo_filename`] || '';
-            const lkpdUrl = answers[`${actId}_lkpd_url`] || '';
-            const photoUrl = answers[`${actId}_photo_url`] || '';
-            const lkpdPreview = lkpdUrl ? `<a href="${escapeHTML(lkpdUrl)}" target="_blank" rel="noopener" class="text-xs font-bold text-blue-700 underline">Lihat LKPD tersimpan</a>` : '';
-            const photoPreview = photoUrl ? `<a href="${escapeHTML(photoUrl)}" target="_blank" rel="noopener" class="text-xs font-bold text-emerald-700 underline">Lihat foto dokumentasi tersimpan</a>` : '';
+            const lkpdUrls = parseStudentEvidenceList(answers[`${actId}_lkpd_urls`] || answers[`${actId}_lkpd_url`]);
+            const photoUrls = parseStudentEvidenceList(answers[`${actId}_photo_urls`] || answers[`${actId}_photo_url`]);
+            const lkpdUrl = lkpdUrls[0] || '';
+            const photoUrl = photoUrls[0] || '';
+            const lkpdPreview = '';
+            const photoPreview = '';
             const fileId = `${actId}-lkpd-file`;
             const photoId = `${actId}-photo-file`;
             const theme = {blue:['#eaf4ff','#dbeafe','#2563eb'],amber:['#fff8e5','#fde7a7','#d97706'],violet:['#f5edff','#eadcff','#7c3aed'],orange:['#fff2e8','#fed7aa','#ea580c'],teal:['#e6fffb','#99f6e4','#0f766e']}[cfg.color];
@@ -4112,8 +4246,8 @@ function renderStudentActivityForm(actId) {
                       <p>Setelah menjawab pertanyaan pemantik, unggah hasil LKPD dan foto dokumentasi kegiatanmu. Kemudian, isi penilaian diri, penilaian teman, dan refleksi singkat di bagian bawah.</p>
                     </section>
                     <section id="act1-bukti" class="space-y-3">
-                      <section class="activity-step-card" style="background:linear-gradient(110deg,#eaf4ff,#ffffff);border-color:#bfdbfe"><div class="flex h-12 w-12 items-center justify-center rounded-full bg-blue-600 text-xl font-black text-white">1</div><div class="flex h-14 w-14 items-center justify-center text-4xl text-blue-600"><i class="fa-solid fa-file-pen"></i></div><div class="min-w-0 w-full space-y-2"><h3 class="text-lg font-black text-slate-950">Unggah Hasil LKPD</h3><p class="text-sm text-slate-700">Pilih foto atau PDF hasil pekerjaan LKPD-mu.</p><div class="flex flex-col gap-3 rounded-xl border border-dashed border-blue-300 bg-white p-3 sm:flex-row sm:items-center"><div class="min-w-0 flex-1"><p id="${actId}-lkpd-file-name" class="break-words text-xs text-slate-500">${escapeHTML(fileName || 'Belum ada file dipilih')}</p><div id="${actId}-lkpd-preview" class="mt-1 text-xs">${lkpdPreview}</div><p class="mt-1 text-xs text-slate-500">Format: PDF, DOC, DOCX, JPG, atau PNG</p></div><label for="${fileId}" class="cursor-pointer rounded-xl border-2 border-blue-500 px-5 py-3 text-center font-black text-blue-700">Pilih File</label><input id="${fileId}" type="file" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div></div></section>
-                      <section class="activity-step-card" style="background:linear-gradient(110deg,#ecfdf5,#ffffff);border-color:#a7f3d0"><div class="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-600 text-xl font-black text-white">2</div><div class="flex h-14 w-14 items-center justify-center text-4xl text-emerald-600"><i class="fa-solid fa-camera"></i></div><div class="min-w-0 w-full space-y-2"><h3 class="text-lg font-black text-slate-950">Foto Dokumentasi Kegiatan</h3><p class="text-sm text-slate-700">Unggah foto saat kamu mengamati atau mengelompokkan sampah.</p><div class="flex flex-col gap-3 rounded-xl border border-dashed border-emerald-300 bg-white p-3 sm:flex-row sm:items-center"><div class="min-w-0 flex-1"><p id="${actId}-photo-file-name" class="break-words text-xs text-slate-500">${escapeHTML(photoName || 'Belum ada foto dipilih')}</p><div id="${actId}-photo-preview" class="mt-1 text-xs">${photoPreview}</div><p class="mt-1 text-xs text-slate-500">Format: foto/gambar</p></div><label for="${photoId}" class="cursor-pointer rounded-xl border-2 border-emerald-500 px-5 py-3 text-center font-black text-emerald-700">Pilih Foto</label><input id="${photoId}" data-kind="photo" type="file" accept="image/*" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div></div></section>
+                      ${renderStudentEvidenceUploader(actId, 'lkpd', 1)}
+                      ${renderStudentEvidenceUploader(actId, 'photo', 2)}
                     </section>
                     ${cfg.self.length ? `<section id="act1-self" class="scroll-mt-4 rounded-2xl border border-sky-100 bg-white p-4 shadow-sm"><h3 class="mb-3 text-lg font-black text-blue-950"><i class="fa-solid fa-user-check mr-2"></i>Penilaian Diri</h3>${renderStudentAPKAssessment(actId,'self',cfg.self)}</section>` : ''}
                     ${cfg.peer.length ? `<section id="act1-peer" class="scroll-mt-4 rounded-2xl border border-indigo-100 bg-white p-4 shadow-sm"><h3 class="mb-3 text-lg font-black text-indigo-950"><i class="fa-solid fa-users mr-2"></i>Penilaian Teman Sebaya</h3>${renderStudentAPKAssessment(actId,'peer',cfg.peer)}</section>` : ''}
@@ -4130,18 +4264,8 @@ function renderStudentActivityForm(actId) {
                 </section>` : ''}
                 <div class="student-activity-hero"><span class="activity-chip"><i class="fa-solid fa-location-dot"></i> Aktivitas ${cfg.number}</span><h2>${cfg.title}</h2><p>Selesaikan tugas, unggah hasil LKPD dan foto dokumentasi, lalu isi penilaian serta refleksi yang sesuai dengan aktivitas ini.</p></div>
                 <div class="rounded-2xl border border-sky-100 bg-white p-3 sm:p-4 space-y-3">
-                    <section class="activity-step-card" style="background:linear-gradient(110deg,${theme[0]},#ffffff);border-color:${theme[1]}">
-                        <div class="flex h-12 w-12 items-center justify-center rounded-full" style="background:${theme[2]};color:white;font-size:1.5rem;font-weight:900">1</div>
-                        <div class="flex h-14 w-14 items-center justify-center text-5xl" style="color:${theme[2]}"><i class="fa-solid fa-file-pen"></i></div>
-                        <div class="min-w-0 space-y-3 w-full"><div><h3 class="text-xl font-black text-slate-950">Unggah Hasil LKPD</h3><p class="mt-1 text-sm text-slate-700">Kerjakan LKPD dari guru, kemudian pilih foto atau PDF hasil pekerjaanmu.</p></div>
-                            <div class="rounded-xl border border-dashed p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center gap-3" style="border-color:${theme[2]};background:#ffffffd9"><span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-2xl" style="color:${theme[2]}"><i class="fa-solid fa-file-arrow-up"></i></span><div class="flex-1 min-w-0"><h4 class="font-black">Berkas hasil LKPD</h4><p class="text-sm text-slate-600">Format: PDF, DOC, DOCX, JPG, atau PNG</p><p id="${actId}-lkpd-file-name" class="mt-1 text-xs text-slate-500 break-words">${escapeHTML(fileName || 'Belum ada file dipilih')}</p><div id="${actId}-lkpd-preview" class="mt-1 text-xs">${lkpdPreview}</div></div><label for="${fileId}" class="cursor-pointer text-center rounded-xl border-2 px-5 py-3 font-black hover:bg-slate-50" style="border-color:${theme[2]};color:${theme[2]}">Pilih File</label><input id="${fileId}" type="file" accept="image/*,.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div>
-                        </div>
-                    </section>
-                    <section class="activity-step-card" style="background:linear-gradient(110deg,#ecfdf5,#ffffff);border-color:#a7f3d0">
-                        <div class="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-600 text-white text-xl font-black">2</div><div class="flex h-14 w-14 items-center justify-center text-5xl text-emerald-600"><i class="fa-solid fa-camera"></i></div>
-                        <div class="min-w-0 space-y-3 w-full"><div><h3 class="text-xl font-black text-slate-950">Foto Dokumentasi Kegiatan</h3><p class="mt-1 text-sm text-slate-700">Pilih foto yang menunjukkan proses atau hasil kegiatanmu. Dokumentasi foto diperlukan pada Aktivitas 1–5.</p></div>
-                        <div class="rounded-xl border border-dashed border-emerald-300 bg-white p-3 flex flex-col sm:flex-row sm:items-center gap-3"><div class="flex-1 min-w-0"><p id="${actId}-photo-file-name" class="text-xs text-slate-500 break-words">${escapeHTML(photoName || 'Belum ada foto dipilih')}</p><div id="${actId}-photo-preview" class="mt-1 text-xs">${photoPreview}</div><p class="mt-1 text-xs text-slate-500">Format: foto/gambar</p></div><label for="${photoId}" class="cursor-pointer text-center rounded-xl border-2 border-emerald-500 px-5 py-3 font-black text-emerald-700">Pilih Foto</label><input id="${photoId}" data-kind="photo" type="file" accept="image/*" class="sr-only" onchange="handleStudentActivityFile('${actId}',this)"></div></div>
-                    </section>
+                    ${renderStudentEvidenceUploader(actId, 'lkpd', 1)}
+                    ${renderStudentEvidenceUploader(actId, 'photo', 2)}
                     ${actId === 'act4' ? `<section class="activity-step-card" style="background:linear-gradient(110deg,#fff7ed,#ffffff);border-color:#fed7aa"><div class="flex h-12 w-12 items-center justify-center rounded-full bg-orange-600 text-white text-xl font-black">3</div><div class="flex h-14 w-14 items-center justify-center text-5xl text-orange-600"><i class="fa-solid fa-video"></i></div><div class="min-w-0 space-y-2 w-full"><h3 class="text-xl font-black text-slate-950">Tautan Presentasi/Video</h3><p class="text-sm text-slate-700">Tempel tautan presentasi atau video hasil kegiatan kelompok.</p><input type="url" value="${escapeHTML(answers[`${actId}_video_url`] || '')}" oninput="updateStudentAnswerLocally('${actId}_video_url',this.value)" class="w-full rounded-xl border border-orange-200 bg-white p-3 text-sm" placeholder="https://..."></div></section>` : ''}
                     ${cfg.peer.length ? renderStudentAPKAssessment(actId,'peer',cfg.peer) : ''}
                     ${renderStudentAPKAssessment(actId,'self',cfg.self)}
@@ -6038,7 +6162,7 @@ function renderStudentActivityForm(actId) {
         }
         function teacherPortfolioHumanLabel(key) {
             const labels={
-                'lkpd url':'Hasil LKPD', 'photo url':'Foto Dokumentasi', 'video url':'Link Video',
+                'lkpd url':'Hasil LKPD', 'lkpd urls':'Hasil LKPD', 'photo url':'Foto Dokumentasi', 'photo urls':'Foto Dokumentasi', 'video url':'Link Video',
                 'jawaban 1':'Jawaban Kegiatan 1', 'jawaban 2':'Jawaban Kegiatan 2',
                 'padlet':'Tautan Karya', 'refleksi':'Refleksi Murid',
                 'peer':'Penilaian Teman Sebaya', 'self':'Penilaian Diri'
@@ -6089,8 +6213,8 @@ function renderStudentActivityForm(actId) {
                     // Bukti file dari kolom khusus versi baru maupun format gabungan versi lama.
                     const combined=teacherPortfolioParseStructured(sub.padlet || sub.link_karya_padlet || sub.linkKarya || '');
                     const evidenceSources=[
-                        ['lkpd_url',sub.lkpd_url || sub.lkpdUrl || answers[`${act.id}_lkpd_url`] || (combined&&combined.lkpd_url)],
-                        ['photo_url',sub.photo_url || sub.photoUrl || answers[`${act.id}_photo_url`] || (combined&&combined.photo_url)],
+                        ['lkpd_urls',sub.lkpd_urls || sub.lkpdUrls || answers[`${act.id}_lkpd_urls`] || (combined&&combined.lkpd_urls) || sub.lkpd_url || sub.lkpdUrl || answers[`${act.id}_lkpd_url`] || (combined&&combined.lkpd_url)],
+                        ['photo_urls',sub.photo_urls || sub.photoUrls || answers[`${act.id}_photo_urls`] || (combined&&combined.photo_urls) || sub.photo_url || sub.photoUrl || answers[`${act.id}_photo_url`] || (combined&&combined.photo_url)],
                         ['video_url',sub.video_url || sub.videoUrl || answers[`${act.id}_video_url`] || answers[`${act.id}_link_video`] || (combined&&combined.video_url)]
                     ];
                     evidenceSources.forEach(([key,value])=>{if(value)add(st,act,key,value);});
@@ -6106,7 +6230,8 @@ function renderStudentActivityForm(actId) {
                         if(/^(peer|self|peer_assessment|self_assessment)$/.test(lower) || /peer_|self_/.test(lower)) return;
                         if(/refleksi/.test(lower)) { add(st,act,key,value,'Refleksi'); return; }
                         if(/foto|photo|video|upload|bukti|karya|lkpd|file|link|padlet|poster|dokumentasi|produk|hasil|rancangan|proyek|gambar|jawaban_|pengamatan|dampak|kesimpulan|organik|anorganik|alasan|jadwal|pemantauan|kebiasaan/.test(lower)) {
-                            if(/(lkpd_url|photo_url|video_url)$/.test(lower) && evidenceSources.some(([k,v])=>k===lower.replace(/^act[1-5]_/, '') && v)) return;
+                            if(/(lkpd_urls?|photo_urls?|video_url)$/.test(lower)) return;
+                        if(/_(lkpd|photo)_filenames$/.test(lower)) return;
                             add(st,act,key,value);
                         }
                     });
