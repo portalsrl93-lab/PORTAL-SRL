@@ -820,6 +820,44 @@
 }
 </style>
 
+
+<style id="portal-srl-feedback-hero-animation">
+  /* Banner khusus menu Umpan Balik Murid. Perubahan dibatasi pada halaman ini. */
+  #studentFeedbackPage .feedback-hero {
+    min-height: 150px;
+    background: linear-gradient(112deg, #d9fbe9 0%, #dff8f7 52%, #c9f5df 100%);
+    isolation: isolate;
+  }
+  #studentFeedbackPage .feedback-hero-glow {
+    position: absolute; z-index: -1; border-radius: 9999px; pointer-events: none;
+    background: rgba(255,255,255,.48); filter: blur(1px);
+  }
+  #studentFeedbackPage .feedback-hero-glow-one { width: 210px; height: 210px; right: 8%; top: -115px; }
+  #studentFeedbackPage .feedback-hero-glow-two { width: 150px; height: 150px; right: 28%; bottom: -112px; background: rgba(16,185,129,.10); }
+  #studentFeedbackPage .feedback-hero-leaf {
+    position: absolute; z-index: 0; color: rgba(5,150,105,.22); pointer-events: none;
+    animation: feedbackLeafFloat 5.5s ease-in-out infinite;
+  }
+  #studentFeedbackPage .feedback-hero-leaf-one { right: 8%; top: 18%; font-size: 42px; transform: rotate(-24deg); }
+  #studentFeedbackPage .feedback-hero-leaf-two { right: 23%; bottom: 12%; font-size: 28px; animation-delay: -2s; transform: rotate(28deg); }
+  #studentFeedbackPage .feedback-hero-leaf-three { right: 3%; bottom: 12%; font-size: 34px; animation-delay: -3.5s; }
+  #studentFeedbackPage .feedback-hero-icon { outline: 1px solid rgba(5,150,105,.12); }
+  @keyframes feedbackLeafFloat {
+    0%, 100% { translate: 0 0; rotate: 0deg; }
+    50% { translate: 0 -10px; rotate: 8deg; }
+  }
+  @media (max-width: 640px) {
+    #studentFeedbackPage .feedback-hero-content { min-height: 132px; gap: 12px; padding: 18px 16px; }
+    #studentFeedbackPage .feedback-hero-leaf-one { right: 5%; top: 8%; font-size: 29px; }
+    #studentFeedbackPage .feedback-hero-leaf-two { right: 14%; bottom: 8%; font-size: 22px; }
+    #studentFeedbackPage .feedback-hero-leaf-three { right: 2%; bottom: 12%; font-size: 24px; }
+    #studentFeedbackPage .feedback-hero-content p:last-child { max-width: 34rem; padding-right: 8px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #studentFeedbackPage .feedback-hero-leaf { animation: none !important; }
+  }
+</style>
+
 </head>
 <body class="overflow-x-hidden min-h-screen bg-[#f4f9f1]">
 <div id="srl-global-leaf-rain" aria-hidden="true">
@@ -4322,7 +4360,21 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
             }).join('');
             const finalNotes=feedback.filter(f=>String(f.actId||f.act_id||'')==='topik_akhir');
             return `<div class="w-full max-w-[1500px] mx-auto space-y-5 animate-pop-in pb-8" id="studentFeedbackPage">
-                <section class="overflow-hidden rounded-2xl border border-emerald-100 bg-gradient-to-r from-emerald-50 via-cyan-50 to-emerald-100 shadow-sm"><div class="flex items-center gap-4 p-5 sm:p-7"><div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white text-emerald-700 shadow-sm"><i class="fa-solid fa-comments text-2xl"></i></div><div><p class="text-xs font-extrabold uppercase tracking-wider text-emerald-700">PORTOFOLIO BELAJAR</p><h2 class="mt-1 text-xl font-black text-emerald-950">Umpan Balik Guru</h2><p class="mt-1 text-sm text-slate-600">Lihat masukan guru untuk membantumu berkembang.</p></div></div></section>
+                <section class="feedback-hero relative isolate overflow-hidden rounded-2xl border border-emerald-100 shadow-sm" aria-label="Banner Umpan Balik Guru">
+                    <div class="feedback-hero-glow feedback-hero-glow-one" aria-hidden="true"></div>
+                    <div class="feedback-hero-glow feedback-hero-glow-two" aria-hidden="true"></div>
+                    <i class="feedback-hero-leaf feedback-hero-leaf-one fa-solid fa-leaf" aria-hidden="true"></i>
+                    <i class="feedback-hero-leaf feedback-hero-leaf-two fa-solid fa-leaf" aria-hidden="true"></i>
+                    <i class="feedback-hero-leaf feedback-hero-leaf-three fa-solid fa-seedling" aria-hidden="true"></i>
+                    <div class="feedback-hero-content relative z-10 flex min-h-[150px] items-center gap-4 px-5 py-6 sm:min-h-[178px] sm:px-8 sm:py-7">
+                        <div class="feedback-hero-icon flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-white text-emerald-700 shadow-md sm:h-16 sm:w-16"><i class="fa-solid fa-comments text-2xl sm:text-3xl"></i></div>
+                        <div class="min-w-0">
+                            <p class="text-xs font-extrabold uppercase tracking-[.16em] text-emerald-800">PORTOFOLIO BELAJAR</p>
+                            <h2 class="mt-1 text-2xl font-black leading-tight text-emerald-950 sm:text-3xl">Umpan Balik Guru</h2>
+                            <p class="mt-2 max-w-2xl text-sm leading-relaxed text-emerald-950/75 sm:text-base">Lihat apresiasi, saran, dan motivasi dari gurumu. Gunakan masukan tersebut untuk terus mengembangkan hasil belajarmu.</p>
+                        </div>
+                    </div>
+                </section>
                 <section class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
                     <div class="flex flex-wrap items-start justify-between gap-3"><div><p class="text-xs font-extrabold uppercase tracking-wider text-emerald-700">PORTOFOLIO BELAJAR</p><h2 class="mt-1 text-xl font-black text-slate-900">Umpan Balik dari Guru</h2><p class="mt-1 text-sm text-slate-500">Hasil penilaian, catatan, dan tindak lanjut guru untuk setiap aktivitas akan muncul di sini setelah tersimpan.</p></div><span class="rounded-full ${feedback.length?'bg-emerald-50 text-emerald-800':'bg-amber-50 text-amber-800'} px-3 py-1.5 text-xs font-extrabold">${feedback.length} umpan balik</span></div>
                     ${state.student.teacherFeedbackError?`<p class="mt-4 rounded-xl border border-amber-100 bg-amber-50 p-3 text-sm text-amber-800"><i class="fa-solid fa-circle-info mr-2"></i>Masukan guru belum dapat diperbarui saat ini. Coba buka kembali menu ini sebentar lagi.</p>`:''}
