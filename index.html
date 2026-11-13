@@ -4295,7 +4295,7 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
         const studentFeedbackBannerStyle = `
           <style id="student-feedback-banner-only-style">
             #studentFeedbackPage .student-feedback-banner{
-              display:block;width:100%;max-width:100%;margin:0 0 14px;
+              display:block;width:100%;max-width:1100px;margin:0 auto 14px;
               overflow:hidden;border:0;background:transparent;box-shadow:none;
               border-radius:16px;line-height:0;
             }
@@ -4304,7 +4304,7 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
               object-fit:contain;object-position:center;border:0;
             }
             @media(max-width:640px){
-              #studentFeedbackPage .student-feedback-banner{border-radius:12px;margin-bottom:12px}
+              #studentFeedbackPage .student-feedback-banner{width:100%;max-width:100%;border-radius:12px;margin-bottom:12px}
             }
           </style>`
 
