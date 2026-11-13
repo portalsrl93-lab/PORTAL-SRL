@@ -1352,6 +1352,7 @@
                             if (dataRes.progress) state.student.progress = { ...state.student.progress, ...dataRes.progress };
                             if (dataRes.answers) state.student.answers = dataRes.answers;
                         }
+                        await refreshActivityRestrictions(false);
                         const peersRes = await apiCall('getStudentPeers', { nisn: state.student.nisn });
                         state.student.peers = peersRes?.status === 'success' && Array.isArray(peersRes.students) ? peersRes.students : [];
                         state.student.peersLoaded = !!(peersRes && peersRes.status === 'success');
@@ -1487,21 +1488,34 @@
             return titles[id] || id;
         }
 
+        // Status akses dibaca dari backend berdasarkan NISN murid, sehingga setiap murid
+        // mengikuti pengaturan guru yang menaungi akunnya. Status ON selalu mengizinkan akses,
+        // tanpa mensyaratkan aktivitas sebelumnya selesai.
+        async function refreshActivityRestrictions(renderAfterUpdate = false) {
+            if (!state.student || !state.student.isLoggedIn || !state.student.nisn) return false;
+            try {
+                const res = await apiCall('getRestrictionStatus', { nisn: state.student.nisn, refresh: Date.now() });
+                if (!res || res.status !== 'success' || !res.restrictions) return false;
+                const defaults = { act1: true, act2: true, act3: true, act4: true, act5: true };
+                state.teacherSettings = state.teacherSettings || {};
+                state.teacherSettings.unlockedActivities = { ...defaults, ...res.restrictions };
+                if (renderAfterUpdate && state.currentView === 'murid_board') renderStudentBoard();
+                return true;
+            } catch (err) {
+                console.warn('Status akses aktivitas belum berhasil diperbarui:', err);
+                return false;
+            }
+        }
+
         function getActivityAccessState(targetSection) {
             const ids = ['act1','act2','act3','act4','act5'];
             if (!ids.includes(targetSection)) return { allowed: true, reason: '' };
-            const settings = state.teacherSettings || {};
-            const unlocked = settings.unlockedActivities || {};
-            if (unlocked[targetSection] === false) return { allowed: false, reason: 'Aktivitas ini sedang ditutup oleh guru.' };
-            const index = ids.indexOf(targetSection);
-            if (index > 0) {
-                for (let i = 0; i < index; i++) {
-                    const previous = ids[i];
-                    if (!state.student.progress?.[previous]) {
-                        return { allowed: false, reason: `Selesaikan ${getSectionTitle(previous)} terlebih dahulu.` };
-                    }
-                }
+            const unlocked = (state.teacherSettings && state.teacherSettings.unlockedActivities) || {};
+            if (unlocked[targetSection] === false) {
+                return { allowed: false, reason: 'Aktivitas ini sedang ditutup oleh guru.' };
             }
+            // ON berarti murid boleh membuka aktivitas ini kapan pun, meskipun tugas
+            // pada aktivitas sebelumnya belum selesai.
             return { allowed: true, reason: '' };
         }
 
@@ -1523,7 +1537,7 @@
             return true;
         }
 
-        function changeStudentSection(section) {
+        async function changeStudentSection(section) {
             if (['beranda', 'petunjuk', 'pengantar', 'stimulasi', 'ruang_belajar', 'umpan_balik', 'pencapaianku', 'penyelesaian'].includes(section)) {
                 state.student.currentSection = section;
                 if (section === 'ruang_belajar') refreshRoomLearningContent();
@@ -1536,6 +1550,7 @@
             }
 
             if (section.startsWith('act')) {
+                await refreshActivityRestrictions(false);
                 const access = getActivityAccessState(section);
                 if (!access.allowed) {
                     showModal('Aktivitas Terkunci 🔒', `<strong>${getSectionTitle(section)}</strong> belum dapat dibuka. ${escapeHTML(access.reason)} Selesaikan aktivitas secara berurutan dan ikuti pengaturan akses dari guru.`, 'warning');
@@ -2017,7 +2032,7 @@
         // Cache hanya untuk aksi pembacaan; aksi simpan/perubahan tidak pernah di-cache.
         const API_SESSION_CACHEABLE_ACTIONS = new Set([
             'getStimulasiContent', 'getRoomLearningContent',
-            'getRestrictionStatus', 'getDashboardStats', 'getTeacherSettings', 'getPengaturan',
+            'getDashboardStats', 'getTeacherSettings', 'getPengaturan',
             'getGuideResources', 'getStudentAPKProfile', 'getTeacherEvaluation',
             'getTeacherData', 'getTeacherFinalCapaian', 'getInitialAppData', 'getStudentData', 'getUserStateData', 'fetchInitialData'
         ]);
@@ -2517,6 +2532,7 @@
                 state.student.progress = { ...state.student.progress, ...dataRes.progress };
                 state.student.answers = dataRes.answers || {};
             }
+            await refreshActivityRestrictions(false);
             // Ambil daftar teman nyata dari tab USERS sesuai kelas murid yang login.
             const peersRes = await apiCall('getStudentPeers', { nisn: userId });
             state.student.peers = (peersRes && peersRes.status === 'success' && Array.isArray(peersRes.students)) ? peersRes.students : [];
@@ -4376,9 +4392,10 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
             </div>`;
         }
 
-        function navigateStudentActivity(section) {
+        async function navigateStudentActivity(section) {
             const ids = ['act1','act2','act3','act4','act5'];
             if (!ids.includes(section)) return;
+            await refreshActivityRestrictions(false);
             const access = getActivityAccessState(section);
             if (!access.allowed) {
                 showModal('Aktivitas Terkunci 🔒', `<strong>${getSectionTitle(section)}</strong> belum dapat dibuka. ${escapeHTML(access.reason)}`, 'warning');
@@ -7732,10 +7749,11 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
             state.teacherSettings.unlockedActivities[actId] = !!enabled;
             renderTeacherBoard();
             try {
-                const res = await apiCall('saveTeacherSettings', { teacherSettings: state.teacherSettings });
-                if (res && (res.status === 'error' || res.ok === false)) throw new Error(res.message || 'Penyimpanan gagal');
-                await refreshRoomLearningContent();
-                showModal('Pengaturan Akses Aktivitas', `${getSectionTitle(actId)} ${enabled ? 'diaktifkan' : 'dinonaktifkan'} dan disimpan ke Google Sheets. Portal Murid akan membaca status terbaru saat memuat ulang data.`, 'success');
+                const res = await apiCall('saveRestrictionStatus', { aktivitasId: actId, status: !!enabled });
+                if (!res || res.status !== 'success' || res.active !== !!enabled) {
+                    throw new Error(res?.message || 'Status akses belum berhasil dikonfirmasi oleh server.');
+                }
+                showModal('Pengaturan Akses Aktivitas', `${getSectionTitle(actId)} ${enabled ? 'diaktifkan' : 'dinonaktifkan'} dan tersimpan. ${enabled ? 'Murid dapat langsung membuka aktivitas ini tanpa menunggu aktivitas sebelumnya selesai.' : 'Murid tidak dapat membuka aktivitas ini sampai guru mengaktifkannya kembali.'}`, 'success');
             } catch (err) {
                 state.teacherSettings.unlockedActivities[actId] = previous;
                 renderTeacherBoard();
@@ -7798,10 +7816,10 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
                         <span class="rounded-full px-3 py-1 text-[10px] font-black ${state.teacherSettings.unlockedActivities[actId]?'bg-emerald-100 text-emerald-800':'bg-rose-100 text-rose-800'}">${state.teacherSettings.unlockedActivities[actId]?'AKTIF / ON':'NONAKTIF / OFF'}</span>
                     </div>
                     <div class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-xl border ${state.teacherSettings.unlockedActivities[actId]?'border-emerald-200 bg-white':'border-rose-200 bg-rose-50'} p-4">
-                        <div><b class="text-sm text-slate-800">Aktivitas ${cfg.number}: ${escapeHTML(cfg.title)}</b><p class="mt-1 text-[11px] text-slate-500">${escapeHTML(cfg.focus)}</p><p class="mt-2 text-[10px] font-semibold ${state.teacherSettings.unlockedActivities[actId]?'text-emerald-700':'text-rose-700'}">${state.teacherSettings.unlockedActivities[actId]?'Murid diizinkan mengakses aktivitas ini sesuai urutan.':'Aktivitas ini ditutup untuk murid.'}</p></div>
+                        <div><b class="text-sm text-slate-800">Aktivitas ${cfg.number}: ${escapeHTML(cfg.title)}</b><p class="mt-1 text-[11px] text-slate-500">${escapeHTML(cfg.focus)}</p><p class="mt-2 text-[10px] font-semibold ${state.teacherSettings.unlockedActivities[actId]?'text-emerald-700':'text-rose-700'}">${state.teacherSettings.unlockedActivities[actId]?'Murid dapat mengakses aktivitas ini tanpa menunggu aktivitas sebelumnya selesai.':'Aktivitas ini ditutup untuk murid.'}</p></div>
                         <button type="button" onclick="toggleTeacherActivityAccess('${actId}', ${!state.teacherSettings.unlockedActivities[actId]})" class="shrink-0 rounded-lg px-4 py-3 text-xs font-black text-white ${state.teacherSettings.unlockedActivities[actId]?'bg-rose-500 hover:bg-rose-600':'bg-emerald-600 hover:bg-emerald-700'}"><i class="fa-solid ${state.teacherSettings.unlockedActivities[actId]?'fa-lock':'fa-lock-open'} mr-2"></i>${state.teacherSettings.unlockedActivities[actId]?'Matikan Aktivitas':'Aktifkan Aktivitas'}</button>
                     </div>
-                    <p class="mt-3 text-[10px] text-amber-900"><i class="fa-solid fa-circle-info mr-1"></i>Perubahan disimpan melalui layanan portal. Murid tetap harus menyelesaikan aktivitas sebelumnya sebelum dapat mengakses aktivitas berikutnya.</p>
+                    <p class="mt-3 text-[10px] text-amber-900"><i class="fa-solid fa-circle-info mr-1"></i>Status ON/OFF berlaku khusus untuk aktivitas ini. Aktivitas ON dapat dibuka murid meskipun aktivitas sebelumnya belum selesai.</p>
                 </section>
                 <div class="grid grid-cols-1 xl:grid-cols-12 gap-4">
                     <section class="xl:col-span-7 min-w-0 overflow-hidden rounded-2xl border border-sky-100 bg-white shadow-sm">
