@@ -3099,6 +3099,13 @@
                 teacherActivityState.tab = 'Bukti Belajar';
             }
             renderTeacherBoard();
+            // Muat ulang roster saat guru membuka Data Murid/Kelola Kelas agar
+            // progres kiriman terbaru dari Portal Murid tidak tertahan di cache sesi.
+            if (['data_murid','kelola_kelas'].includes(menuKey)) {
+                fetchTeacherBoardData().then(() => {
+                    if (state.currentView === 'guru_board' && state.teacher.currentMenu === menuKey) renderTeacherBoard();
+                }).catch(err => console.warn('Pembaruan progres murid tertunda:', err));
+            }
             if (menuKey === 'laporan') refreshTeacherReportData(true);
             // Muat ulang konten dari Google Sheets setiap kali guru membuka editor terkait.
             if (menuKey === 'stimulasi') {
