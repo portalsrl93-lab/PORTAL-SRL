@@ -5346,13 +5346,40 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
             const store=state.teacherDataCache.portfolioAssessment || {observation:{},self:{},peer:{},recap:{}};
             try { sessionStorage.setItem('portalSrlPortfolioAssessment', JSON.stringify(store)); } catch(e) {}
             if (!kind || !record || !['observation','recap'].includes(kind)) return;
-            const student = teacherActivityStudents().find(s => String(s.id) === String(record.studentId));
-            const payload = {kind, nisn:String(student?.nisn || record.nisn || record.studentId || '').trim(), student_id:String(record.studentId||''), act_id:String(record.activity||''), values:record.values||{}, notes:record.notes||''};
+
+            const student = teacherActivityStudents().find(s =>
+                String(s.id) === String(record.studentId) ||
+                (record.nisn && String(s.nisn || '') === String(record.nisn))
+            );
+            const nisn = String(student?.nisn || record.nisn || '').trim();
+            if (!nisn) {
+                console.error('Asesmen tidak dikirim: NISN murid tidak ditemukan.', record);
+                showModal('NISN murid tidak ditemukan','Data belum dapat disinkronkan karena identitas NISN murid tidak tersedia. Periksa data murid pada Portal Guru.','warning');
+                return;
+            }
+
+            const values = record.values && typeof record.values === 'object' ? record.values : {};
+            const hasValue = Object.values(values).some(value => String(value == null ? '' : value).trim() !== '');
+            const notes = String(record.notes || '');
+            if (!hasValue && !notes.trim()) return;
+
+            const payload = {
+                kind,
+                nisn,
+                student_id:String(record.studentId || student?.id || ''),
+                act_id:String(record.activity || (kind === 'recap' ? 'all' : '')),
+                values,
+                notes
+            };
             apiCall('savePortfolioAssessment', payload).then(res => {
                 if (!res || res.status !== 'success') {
                     console.error('Gagal menyimpan asesmen ke Google Sheets:', res && res.message);
                     showModal('Data belum tersinkron', (res && res.message) || 'Data tersimpan sementara di perangkat ini, tetapi belum berhasil disimpan ke Google Sheets.', 'warning');
+                    return;
                 }
+                record.syncStatus = 'synced';
+                record.syncedAt = new Date().toISOString();
+                try { sessionStorage.setItem('portalSrlPortfolioAssessment', JSON.stringify(store)); } catch(e) {}
             }).catch(err => {
                 console.error('Gagal menyimpan asesmen ke Google Sheets:', err);
                 showModal('Koneksi penyimpanan gagal','Data tersimpan sementara di perangkat ini. Coba simpan kembali saat koneksi tersedia.','warning');
