@@ -6484,6 +6484,8 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
                 kreativitas: ['kreativitas','apkKreativitas','apk_kreativitas'],
                 kolaborasi: ['kolaborasi','apkKolaborasi','apk_kolaborasi']
             };
+            const finalDimensionScore = s?.apkDimensions?.[dim];
+            if (finalDimensionScore !== undefined && finalDimensionScore !== null) return Math.max(0, Math.min(100, Number(finalDimensionScore) || 0));
             const keys = aliases[dim] || [dim, dim.toLowerCase()];
             for (const key of keys) {
                 const raw = s?.[key];
@@ -6651,22 +6653,70 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
             return normalizeTeacherClassKey(value) === normalizeTeacherClassKey(assigned);
         }
 
+        function teacherFinalApkSummaryForStudent(student, fallbackLevel='') {
+            // Sumber utama capaian akhir adalah Rekap Subdimensi APK (KIND=recap),
+            // bukan penilaian observasi atau penilaian diri/teman sebaya.
+            const labels = [
+                'Penyampaian Argumentasi','Pengambilan Keputusan','Penyelesaian Masalah',
+                'Gagasan Baru','Fleksibilitas Berpikir','Karya','Peduli','Berbagi','Kerja Sama'
+            ];
+            const nisn = String(student?.nisn || '').trim();
+            const sid = String(student?.id ?? '').trim();
+            const bucket = state.teacherDataCache?.portfolioAssessment?.recap || {};
+            const records = Object.values(bucket).filter(record => record &&
+                String(record.nisn || '').trim() === nisn &&
+                String(record.activity || record.act_id || 'all').trim().toLowerCase() === 'all');
+            let values = records.length ? (records.sort((a,b) =>
+                (Date.parse(b.updatedAt || '') || 0) - (Date.parse(a.updatedAt || '') || 0))[0].values || {}) : {};
+            // Kompatibilitas untuk data yang belum melalui normalisasi teacherAssessmentEnsureStore().
+            if (!Object.keys(values).length) {
+                const direct = bucket[`recap_all_${nisn}`] || bucket[`recap_all_${sid}`];
+                values = direct?.values || {};
+            }
+            const score = level => ({'Berkembang':1,'Cakap':2,'Mahir':3}[String(level || '').trim()] || 0);
+            const dimensionFor = {
+                'Penyampaian Argumentasi':'penalaran', 'Pengambilan Keputusan':'penalaran', 'Penyelesaian Masalah':'penalaran',
+                'Gagasan Baru':'kreativitas', 'Fleksibilitas Berpikir':'kreativitas', 'Karya':'kreativitas',
+                'Peduli':'kolaborasi', 'Berbagi':'kolaborasi', 'Kerja Sama':'kolaborasi'
+            };
+            const dimensionScores = { penalaran:[], kreativitas:[], kolaborasi:[] };
+            labels.forEach(label => { const n=score(values[label]); if(n) dimensionScores[dimensionFor[label]].push(n); });
+            const assessed = labels.map(label => score(values[label])).filter(n => n > 0);
+            const dimensionPercent = {};
+            Object.keys(dimensionScores).forEach(key => {
+                const list=dimensionScores[key];
+                dimensionPercent[key]=list.length ? Math.round((list.reduce((a,b)=>a+b,0)/list.length)/3*100) : 0;
+            });
+            if (!assessed.length) {
+                return { level: fallbackLevel || 'Belum dinilai', assessedCount: 0, total: labels.length, average: 0, dimensionPercent };
+            }
+            const average = assessed.reduce((sum,n)=>sum+n,0) / assessed.length;
+            const level = average >= 2.5 ? 'Mahir' : average >= 1.5 ? 'Cakap' : 'Berkembang';
+            return { level, assessedCount: assessed.length, total: labels.length, average, dimensionPercent };
+        }
+
         function teacherPortalRoster() {
             // Akun guru tidak memakai data demo. Hanya roster backend yang sudah difilter per kelas.
             const source = Array.isArray(state.teacherDataCache?.students) ? state.teacherDataCache.students : [];
-            return source.filter(s => teacherClassMatches(s.kelas)).map((s, i) => ({
-                ...s,
-                id: Number(s.id ?? i + 1),
-                nama: s.nama || s.name || `Murid ${i + 1}`,
-                lp: (['P','PEREMPUAN'].includes(String(s.lp ?? s.jenisKelamin ?? s.jenis_kelamin ?? s['Jenis Kelamin Murid'] ?? s['Jenis Kelamin Siswa'] ?? s.gender ?? 'L').trim().toUpperCase())?'P':'L'),
-                kelas: s.kelas || 'Kelas IV',
-                kelompok: s.kelompok || 'Belum Ada Kelompok',
-                status: s.status || 'Aktif',
-                progres: Math.max(0, Math.min(100, Number(s.progres ?? s.progressPercent ?? s.progress) || 0)),
-                apk: s.apk || (['penalaran','penalaranKritis','penalaran_kritis','apkPenalaran','apk_penalaran','kreativitas','apkKreativitas','apk_kreativitas','kolaborasi','apkKolaborasi','apk_kolaborasi'].some(k => s[k] !== undefined && s[k] !== null && s[k] !== '') ? 'Berkembang' : 'Belum dinilai'),
-                nisn: s.nisn || '-',
-                avatar: s.avatar || ''
-            }));
+            return source.filter(s => teacherClassMatches(s.kelas)).map((s, i) => {
+                const student = { ...s, id: Number(s.id ?? i + 1), nisn: s.nisn || '-' };
+                const apkSummary = teacherFinalApkSummaryForStudent(student, s.apk || '');
+                return {
+                    ...student,
+                    nama: s.nama || s.name || `Murid ${i + 1}`,
+                    lp: (['P','PEREMPUAN'].includes(String(s.lp ?? s.jenisKelamin ?? s.jenis_kelamin ?? s['Jenis Kelamin Murid'] ?? s['Jenis Kelamin Siswa'] ?? s.gender ?? 'L').trim().toUpperCase())?'P':'L'),
+                    kelas: s.kelas || 'Kelas IV',
+                    kelompok: s.kelompok || 'Belum Ada Kelompok',
+                    status: s.status || 'Aktif',
+                    progres: Math.max(0, Math.min(100, Number(s.progres ?? s.progressPercent ?? s.progress) || 0)),
+                    apk: apkSummary.level,
+                    apkAssessedCount: apkSummary.assessedCount,
+                    apkTotalSubdimensions: apkSummary.total,
+                    apkAverage: apkSummary.average,
+                    apkDimensions: apkSummary.dimensionPercent || {penalaran:0,kreativitas:0,kolaborasi:0},
+                    avatar: s.avatar || ''
+                };
+            });
         }
 
         function teacherPortalAvatar(student, size='w-9 h-9') {
@@ -7389,7 +7439,7 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
                 <td class="p-2.5 text-center">${s.lp==='P'?'P':'L'}</td><td class="p-2.5 text-slate-600">${escapeHTML(s.kelompok)}</td>
                 <td class="p-2.5"><span class="rounded-full px-3 py-1 text-[10px] font-bold ${s.status==='Aktif'?'bg-emerald-100 text-emerald-800':'bg-slate-100 text-slate-600'}">${escapeHTML(s.status)}</span></td>
                 <td class="p-2.5 min-w-[140px]"><div class="flex items-center gap-2">${teacherPortalProgressBar(s.progres,s.progres>=80?'bg-emerald-500':s.progres>=50?'bg-sky-500':'bg-amber-400')}<b class="text-xs">${s.progres}%</b></div></td>
-                <td class="p-2.5 text-center"><span class="text-xs font-bold text-slate-600">${Math.min(5,Math.round(s.progres/20))}/5</span></td><td class="p-2.5 text-center"><span class="rounded-full px-3 py-1 text-[10px] font-bold ${s.apk==='Mahir'?'bg-emerald-100 text-emerald-800':s.apk==='Cakap'?'bg-blue-100 text-blue-800':'bg-amber-100 text-amber-800'}">${escapeHTML(s.apk)}</span></td>
+                <td class="p-2.5 text-center"><span class="text-xs font-bold text-slate-600">${Math.min(5,Math.round(s.progres/20))}/5</span></td><td class="p-2.5 text-center"><span class="rounded-full px-3 py-1 text-[10px] font-bold ${s.apk==='Mahir'?'bg-emerald-100 text-emerald-800':s.apk==='Cakap'?'bg-blue-100 text-blue-800':s.apk==='Berkembang'?'bg-amber-100 text-amber-800':'bg-slate-100 text-slate-600'}" title="${s.apkAssessedCount ? `${s.apkAssessedCount} dari 9 subdimensi telah dinilai` : 'Belum ada rekap capaian akhir'}">${escapeHTML(s.apk)}${s.apkAssessedCount ? ` · ${s.apkAssessedCount}/9` : ''}</span></td>
                 <td class="p-2.5"><div class="flex items-center justify-center gap-2"><button title="Lihat profil" onclick="selectStudentDetail(${s.id});setTeacherMenu('data_murid')" class="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100"><i class="fa-solid fa-eye"></i></button><button title="Lihat progres" onclick="showTeacherStudentActivity(${s.id})" class="w-8 h-8 rounded-lg bg-sky-50 text-sky-700 hover:bg-sky-100"><i class="fa-solid fa-chart-column"></i></button><button title="Edit data murid" onclick="openTeacherEditStudentModal('${escapeHTML(s.nisn||'')}')" class="w-8 h-8 rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100"><i class="fa-solid fa-pen-to-square"></i></button><button title="Opsi murid" onclick="showModal('Informasi murid','${escapeHTML(s.nama)} · ${escapeHTML(s.kelas)} · ${escapeHTML(s.kelompok)}','info')" class="w-8 h-8 rounded-lg text-slate-500 hover:bg-slate-100"><i class="fa-solid fa-ellipsis-vertical"></i></button></div></td>
             </tr>`).join('');
             return `
@@ -7872,7 +7922,7 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
             const selected=all.find(s=>s.id===Number(state.teacher.selectedStudentId))||filtered[0]||all[0]||{id:0,nama:'Belum ada murid',kelas:'-',kelompok:'-',lp:'L',progres:0,apk:'Berkembang',nisn:'-'};
             const countBoys=filtered.filter(s=>s.lp==='L').length, countGirls=filtered.filter(s=>s.lp==='P').length;
             const progressLabel=n=>n>=100?'Selesai':n>=60?'Berlangsung':'Belum selesai';
-            const badge = level => `<span class="rounded-full px-3 py-1 text-[10px] font-bold ${level==='Mahir'?'bg-emerald-100 text-emerald-800':level==='Cakap'?'bg-blue-100 text-blue-800':'bg-amber-100 text-amber-800'}">${escapeHTML(level)}</span>`;
+            const badge = (level, count=0) => `<span title="${count ? `${count} dari 9 subdimensi telah dinilai` : 'Belum ada rekap capaian akhir'}" class="rounded-full px-3 py-1 text-[10px] font-bold ${level==='Mahir'?'bg-emerald-100 text-emerald-800':level==='Cakap'?'bg-blue-100 text-blue-800':level==='Berkembang'?'bg-amber-100 text-amber-800':'bg-slate-100 text-slate-600'}">${escapeHTML(level)}${count ? ` · ${count}/9` : ''}</span>`;
             const rowHtml=shown.map((s,i)=>`<tr class="border-b border-slate-100 hover:bg-emerald-50/50 ${selected.id===s.id?'bg-emerald-50/60':''}">
                 <td class="p-2.5 text-center"><input data-data-row type="checkbox" value="${s.id}" ${ui.selected.includes(s.id)?'checked':''} onchange="toggleTeacherDataSelection(${s.id},this.checked)" class="accent-emerald-600 w-4 h-4"></td>
                 <td class="p-2.5 text-center text-slate-400">${(ui.page-1)*ui.pageSize+i+1}</td>
@@ -7880,7 +7930,7 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
                 <td class="p-2.5 text-center text-slate-500">${s.lp==='P'?'P':'L'}</td><td class="p-2.5 text-slate-600">${escapeHTML(s.kelompok)}</td>
                 <td class="p-2.5 text-center"><span class="bg-emerald-100 text-emerald-800 rounded-full px-3 py-1 text-[10px] font-bold">${escapeHTML(s.status)}</span></td>
                 <td class="p-2.5 min-w-[140px]"><div class="flex items-center gap-2">${teacherPortalProgressBar(s.progres,s.progres>=80?'bg-emerald-500':s.progres>=50?'bg-sky-500':'bg-amber-400')}<b class="text-xs">${s.progres}%</b></div></td>
-                <td class="p-2.5 text-center">${badge(s.apk)}</td>
+                <td class="p-2.5 text-center">${badge(s.apk,s.apkAssessedCount)}</td>
                 <td class="p-2.5"><div class="flex items-center justify-center gap-2"><button onclick="selectStudentDetail(${s.id})" title="Lihat profil" class="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100"><i class="fa-solid fa-eye"></i></button><button onclick="showTeacherStudentActivity(${s.id})" title="Lihat aktivitas" class="w-8 h-8 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100"><i class="fa-solid fa-chart-column"></i></button><button onclick="showModal('Informasi murid','${escapeHTML(s.nama)} · ${escapeHTML(s.kelas)} · ${escapeHTML(s.kelompok)}','info')" title="Opsi" class="w-8 h-8 rounded-lg text-slate-500 hover:bg-slate-100"><i class="fa-solid fa-ellipsis-vertical"></i></button></div></td>
             </tr>`).join('');
             const detailTabs=['Ringkasan','Aktivitas','Bukti Karya','Penilaian','Refleksi'];
