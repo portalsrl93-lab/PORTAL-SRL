@@ -5349,6 +5349,11 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
             };
             return state.teacherDataCache.portfolioAssessment;
         }
+        // Autosave asesmen dibuat debounce dan serial. Perubahan cepat pada banyak
+        // indikator tidak lagi mengirim request Google Sheets secara bersamaan.
+        const teacherAssessmentSaveTimers = {};
+        const teacherAssessmentPendingSaves = {};
+        let teacherAssessmentSaveQueue = Promise.resolve();
         function teacherAssessmentPersist(kind, record) {
             const store=state.teacherDataCache.portfolioAssessment || {observation:{},self:{},peer:{},recap:{}};
             try { sessionStorage.setItem('portalSrlPortfolioAssessment', JSON.stringify(store)); } catch(e) {}
@@ -5364,33 +5369,40 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
                 showModal('NISN murid tidak ditemukan','Data belum dapat disinkronkan karena identitas NISN murid tidak tersedia. Periksa data murid pada Portal Guru.','warning');
                 return;
             }
-
-            const values = record.values && typeof record.values === 'object' ? record.values : {};
+            const values = record.values && typeof record.values === 'object' ? {...record.values} : {};
             const hasValue = Object.values(values).some(value => String(value == null ? '' : value).trim() !== '');
             const notes = String(record.notes || '');
             if (!hasValue && !notes.trim()) return;
-
             const payload = {
-                kind,
-                nisn,
+                kind, nisn,
                 student_id:String(record.studentId || student?.id || ''),
                 act_id:String(record.activity || (kind === 'recap' ? 'all' : '')),
-                values,
-                notes
+                values, notes
             };
-            apiCall('savePortfolioAssessment', payload).then(res => {
-                if (!res || res.status !== 'success') {
-                    console.error('Gagal menyimpan asesmen ke Google Sheets:', res && res.message);
-                    showModal('Data belum tersinkron', (res && res.message) || 'Data tersimpan sementara di perangkat ini, tetapi belum berhasil disimpan ke Google Sheets.', 'warning');
-                    return;
-                }
-                record.syncStatus = 'synced';
-                record.syncedAt = new Date().toISOString();
-                try { sessionStorage.setItem('portalSrlPortfolioAssessment', JSON.stringify(store)); } catch(e) {}
-            }).catch(err => {
-                console.error('Gagal menyimpan asesmen ke Google Sheets:', err);
-                showModal('Koneksi penyimpanan gagal','Data tersimpan sementara di perangkat ini. Coba simpan kembali saat koneksi tersedia.','warning');
-            });
+            const queueKey = `${kind}|${nisn}|${payload.act_id}`;
+            teacherAssessmentPendingSaves[queueKey] = {payload, record, store};
+            if (teacherAssessmentSaveTimers[queueKey]) clearTimeout(teacherAssessmentSaveTimers[queueKey]);
+            teacherAssessmentSaveTimers[queueKey] = setTimeout(() => {
+                delete teacherAssessmentSaveTimers[queueKey];
+                const pending = teacherAssessmentPendingSaves[queueKey];
+                delete teacherAssessmentPendingSaves[queueKey];
+                if (!pending) return;
+                teacherAssessmentSaveQueue = teacherAssessmentSaveQueue.then(() =>
+                    apiCall('savePortfolioAssessment', pending.payload)
+                ).then(res => {
+                    if (!res || res.status !== 'success') {
+                        console.error('Gagal menyimpan asesmen ke Google Sheets:', res && res.message);
+                        showModal('Data belum tersinkron', (res && res.message) || 'Data tersimpan sementara di perangkat ini, tetapi belum berhasil disimpan ke Google Sheets.','warning');
+                        return;
+                    }
+                    pending.record.syncStatus = 'synced';
+                    pending.record.syncedAt = new Date().toISOString();
+                    try { sessionStorage.setItem('portalSrlPortfolioAssessment', JSON.stringify(pending.store)); } catch(e) {}
+                }).catch(err => {
+                    console.error('Gagal menyimpan asesmen ke Google Sheets:', err);
+                    showModal('Koneksi penyimpanan gagal','Data tersimpan sementara di perangkat ini. Coba simpan kembali saat koneksi tersedia.','warning');
+                });
+            }, 650);
         }
         function teacherAssessmentSetActivity(v) {
             // Simpan filter yang dipilih secara eksplisit dan validasi nilainya.
