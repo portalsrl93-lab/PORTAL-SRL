@@ -6511,17 +6511,24 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
         function selectReportStudent(id) { reportState.selectedStudentId=String(id); renderTeacherBoard(); }
         function exportTeacherReport() { const t=document.title; document.title='Laporan Capaian Aktivitas Murid - PORTAL-SRL'; window.print(); document.title=t; }
         function exportStudentDevelopmentReport() {
-            const all = reportStudents();
-            const selected = all.find(s => Number(s.id) === Number(reportState.selectedStudentId)) || all[0];
-            if (!selected) { showModal('Data Murid Belum Tersedia', 'Belum ada data murid yang dapat dibuatkan laporan.', 'warning'); return; }
+            // Ambil capaian dari sumber data laporan yang sama dengan dashboard, bukan roster lokal.
+            const reportList = Array.isArray(reportDataCache?.listMurid) ? reportDataCache.listMurid : [];
+            const reportSelected = reportList.find(s => String(s.id ?? s.nisn) === String(reportState.selectedStudentId)) || reportList[0];
+            if (!reportSelected) { showModal('Data Murid Belum Tersedia', 'Belum ada data murid pada rekap laporan yang dapat dibuatkan PDF.', 'warning'); return; }
+            // Gabungkan metadata identitas/progres dari roster, tetapi nilai APK tetap dari rekap tersimpan.
+            const rosterSelected = reportStudents().find(s => String(s.id) === String(reportSelected.id)) || {};
+            const selected = { ...rosterSelected, ...reportSelected, id: reportSelected.id, nama: reportSelected.nama || rosterSelected.nama, nisn: reportSelected.nisn || reportSelected.id };
             const school = state.teacherSettings || {};
-            const esc = value => String(value ?? '').replace(/[&<>\"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
+            const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
             const dims = [
-              {key:'penalaran',label:'Penalaran Kritis'},
+              {key:'penalaranKritis',label:'Penalaran Kritis'},
               {key:'kreativitas',label:'Kreativitas'},
               {key:'kolaborasi',label:'Kolaborasi'}
             ];
-            const dimRows = dims.map(d => { const value=reportScore(selected,d.key); return `<tr><td>${esc(d.label)}</td><td style="text-align:center">${value>0?value+'%':'Belum dinilai'}</td><td>${esc(value>0?reportLevel(value):'Belum dinilai')}</td></tr>`; }).join('');
+            const dimRows = dims.map(d => {
+              const value = Number(selected?.nilaiDimensi?.[d.key] ?? selected?.[d.key] ?? 0) || 0;
+              return `<tr><td>${esc(d.label)}</td><td style="text-align:center">${value>0?value+'%':'Belum dinilai'}</td><td>${esc(value>0?reportLevel(value):'Belum dinilai')}</td></tr>`;
+            }).join('');
             const logo = String(school.logoUrl || '').trim();
             const logoHtml = logo ? `<img src="${esc(logo)}" alt="Logo Sekolah" style="width:78px;height:78px;object-fit:contain">` : '';
             const catatan = selected.catatanGuru || selected.umpanBalik || 'Belum ada deskripsi atau catatan guru yang tersedia.';
