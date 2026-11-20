@@ -6549,8 +6549,6 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
             const activityProgress = Math.max(0, Math.min(100, Number(rosterSelected.progres ?? rosterSelected.progressPercent ?? rosterSelected.progress ?? selected.progres ?? selected.progressPercent ?? selected.progress) || 0));
             const activityCompleted = Math.round(activityProgress / 20);
             const activityStatus = activityProgress >= 100 ? 'Selesai' : activityProgress > 0 ? 'Sedang berlangsung' : 'Belum dimulai';
-            const assessedSubdimensionCount = Object.keys(reportSubdimensionLevels).filter(k => ['Berkembang','Cakap','Mahir'].includes(String(reportSubdimensionLevels[k]||'').trim())).length;
-            const assessmentStatus = assessedSubdimensionCount >= 9 ? 'Sudah dinilai' : assessedSubdimensionCount > 0 ? `Penilaian sebagian (${assessedSubdimensionCount}/9 subdimensi)` : 'Belum dinilai';
             const recapBucket = state.teacherDataCache?.portfolioAssessment?.recap || {};
             const recapRecords = Object.values(recapBucket).filter(record => record &&
               String(record.nisn || '').trim() === reportNisn &&
@@ -6562,6 +6560,8 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
               const directRecap = recapBucket[`recap_all_${reportNisn}`] || recapBucket[`recap_all_${selected?.id}`];
               reportSubdimensionLevels = directRecap?.values || {};
             }
+            const assessedSubdimensionCount = Object.keys(reportSubdimensionLevels).filter(k => ['Berkembang','Cakap','Mahir'].includes(String(reportSubdimensionLevels[k]||'').trim())).length;
+            const assessmentStatus = assessedSubdimensionCount >= 9 ? 'Sudah dinilai' : assessedSubdimensionCount > 0 ? `Penilaian sebagian (${assessedSubdimensionCount}/9 subdimensi)` : 'Belum dinilai';
             const reportDescriptorRows = apkDimensionGroups.map(group => {
               const groupHeader = `<tr><td colspan="3" style="background:#eaf8f1;font-weight:bold;color:#065f46">DIMENSI: ${esc(group.label)}</td></tr>`;
               const subRows = group.subs.map(sub => {
