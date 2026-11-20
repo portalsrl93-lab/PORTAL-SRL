@@ -6516,8 +6516,17 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
             const reportSelected = reportList.find(s => String(s.id ?? s.nisn) === String(reportState.selectedStudentId)) || reportList[0];
             if (!reportSelected) { showModal('Data Murid Belum Tersedia', 'Belum ada data murid pada rekap laporan yang dapat dibuatkan PDF.', 'warning'); return; }
             // Gabungkan metadata identitas/progres dari roster, tetapi nilai APK tetap dari rekap tersimpan.
-            const rosterSelected = reportStudents().find(s => String(s.id) === String(reportSelected.id)) || {};
-            const selected = { ...rosterSelected, ...reportSelected, id: reportSelected.id, nama: reportSelected.nama || rosterSelected.nama, nisn: reportSelected.nisn || reportSelected.id };
+            // Sinkronkan identitas dan progres dari roster dengan prioritas NISN, karena ID numerik
+            // rekap APK dan roster bisa berbeda. Nilai APK tetap menggunakan sumber rekap laporan.
+            const rosterList = reportStudents();
+            const reportNisnKey = String(reportSelected.nisn || reportSelected.NISN || '').trim();
+            const rosterSelected = rosterList.find(s => reportNisnKey && String(s.nisn || s.NISN || '').trim() === reportNisnKey)
+                || rosterList.find(s => String(s.id) === String(reportSelected.id))
+                || rosterList.find(s => String(s.nama || '').trim().toLowerCase() === String(reportSelected.nama || '').trim().toLowerCase() && String(s.kelas || '') === String(reportSelected.kelas || ''))
+                || {};
+            const selected = { ...reportSelected, ...rosterSelected, ...reportSelected,
+                id: reportSelected.id, nama: reportSelected.nama || rosterSelected.nama,
+                nisn: reportSelected.nisn || reportSelected.NISN || rosterSelected.nisn || reportSelected.id };
             const school = state.teacherSettings || {};
             const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
             // Ambil capaian per subdimensi dari rekap penilaian guru (recap),
@@ -6537,6 +6546,11 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
               'Mahir':'Menunjukkan kompetensi secara mandiri, konsisten, dan dapat menerapkannya dengan baik.'
             };
             const reportNisn = String(selected?.nisn || selected?.NISN || selected?.id || '').trim();
+            const activityProgress = Math.max(0, Math.min(100, Number(rosterSelected.progres ?? rosterSelected.progressPercent ?? rosterSelected.progress ?? selected.progres ?? selected.progressPercent ?? selected.progress) || 0));
+            const activityCompleted = Math.round(activityProgress / 20);
+            const activityStatus = activityProgress >= 100 ? 'Selesai' : activityProgress > 0 ? 'Sedang berlangsung' : 'Belum dimulai';
+            const assessedSubdimensionCount = Object.keys(reportSubdimensionLevels).filter(k => ['Berkembang','Cakap','Mahir'].includes(String(reportSubdimensionLevels[k]||'').trim())).length;
+            const assessmentStatus = assessedSubdimensionCount >= 9 ? 'Sudah dinilai' : assessedSubdimensionCount > 0 ? `Penilaian sebagian (${assessedSubdimensionCount}/9 subdimensi)` : 'Belum dinilai';
             const recapBucket = state.teacherDataCache?.portfolioAssessment?.recap || {};
             const recapRecords = Object.values(recapBucket).filter(record => record &&
               String(record.nisn || '').trim() === reportNisn &&
@@ -6549,11 +6563,14 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
               reportSubdimensionLevels = directRecap?.values || {};
             }
             const reportDescriptorRows = apkDimensionGroups.map(group => {
-              const groupHeader = `<tr><td colspan="2" style="background:#eaf8f1;font-weight:bold;color:#065f46">DIMENSI: ${esc(group.label)}</td></tr>`;
+              const groupHeader = `<tr><td colspan="3" style="background:#eaf8f1;font-weight:bold;color:#065f46">DIMENSI: ${esc(group.label)}</td></tr>`;
               const subRows = group.subs.map(sub => {
-                const level = String(reportSubdimensionLevels[sub] || '').trim();
+                const rawLevel = String(reportSubdimensionLevels[sub] || '').trim();
+                const level = rawLevel.toLowerCase() === 'berkembang' ? 'Berkembang' : rawLevel.toLowerCase() === 'cakap' ? 'Cakap' : rawLevel.toLowerCase() === 'mahir' ? 'Mahir' : '';
+                const category = level || 'Belum dinilai';
                 const description = level ? (reportApkDescriptions[level] || 'Deskripsi capaian belum tersedia.') : 'Belum ada penilaian guru yang tersimpan untuk subdimensi ini.';
-                return `<tr><td style="width:32%;font-weight:bold">${esc(sub)}</td><td>${esc(description)}</td></tr>`;
+                const categoryColor = level === 'Mahir' ? '#047857' : level === 'Cakap' ? '#0369a1' : level === 'Berkembang' ? '#b45309' : '#64748b';
+                return `<tr><td style="width:30%;font-weight:bold">${esc(sub)}</td><td style="width:19%;font-weight:bold;color:${categoryColor}">${esc(category)}</td><td>${esc(description)}</td></tr>`;
               }).join('');
               return groupHeader + subRows;
             }).join('');
@@ -6565,8 +6582,8 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
               @page{size:A4;margin:18mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#172033;font-size:11pt;line-height:1.5;margin:0}header{display:flex;align-items:center;gap:16px;border-bottom:3px solid #059669;padding-bottom:14px;margin-bottom:20px}header .school{flex:1;text-align:center}h1{font-size:16pt;margin:0 0 4px;text-transform:uppercase}h2{font-size:13pt;color:#065f46;margin:20px 0 8px}.muted{color:#475569;font-size:9.5pt}.meta{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin:12px 0 18px}.meta div{padding:6px 0;border-bottom:1px solid #e2e8f0}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #cbd5e1;padding:9px;text-align:left}th{background:#ecfdf5}.note{padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;white-space:pre-wrap}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:38px 0 0;page-break-inside:avoid}.signature{margin:0;width:auto;text-align:center;page-break-inside:avoid}.signature .space{height:68px}.footer{margin-top:28px;border-top:1px solid #cbd5e1;padding-top:8px;color:#64748b;font-size:9pt}@media print{.no-print{display:none}}</style></head><body>
               <header>${logoHtml}<div class="school"><h1>${esc(school.schoolName || 'Nama Sekolah Belum Diatur')}</h1><div>${esc(school.schoolAddress || '')}</div><div class="muted">NPSN: ${esc(school.npsn || 'Belum diatur')}</div></div></header>
               <h1 style="text-align:center;font-size:15pt;margin:8px 0 2px">LAPORAN HASIL PERKEMBANGAN KOMPETENSI MURID</h1><p style="text-align:center;margin:0">${esc(school.selectedTopik || 'Topik 2: Aku Bisa Menjaga Lingkungan')}</p><p style="text-align:center;margin:0" class="muted">Tahun Ajaran ${esc(school.schoolYear || 'Belum diatur')}</p>
-              <h2>A. Identitas Murid</h2><div class="meta"><div><b>Nama Murid:</b> ${esc(selected.nama || '-')}</div><div><b>NISN:</b> ${esc(selected.nisn || selected.NISN || '-')}</div><div><b>Kelas:</b> ${esc(selected.kelas || '-')}</div><div><b>Kelompok:</b> ${esc(selected.kelompok || '-')}</div><div><b>Progres Aktivitas:</b> ${Number(selected.progres)||0}%</div><div><b>Status:</b> ${esc(selected.status || 'Dalam proses')}</div></div>
-              <h2>B. Deskripsi Capaian Kompetensi APK</h2><p>Deskripsi berikut menampilkan capaian murid pada setiap subdimensi berdasarkan tahap penilaian guru. Deskriptor mengikuti keterangan capaian pada menu Pencapaianku di Portal Murid.</p><table><thead><tr><th style="width:32%">Dimensi yang Dinilai / Subdimensi</th><th>Deskripsi Capaian Murid</th></tr></thead><tbody>${reportDescriptorRows}</tbody></table>
+              <h2>A. Identitas Murid</h2><div class="meta"><div><b>Nama Murid:</b> ${esc(selected.nama || '-')}</div><div><b>NISN:</b> ${esc(selected.nisn || selected.NISN || '-')}</div><div><b>Kelas:</b> ${esc(selected.kelas || '-')}</div><div><b>Kelompok:</b> ${esc(selected.kelompok || '-')}</div><div><b>Progres Aktivitas:</b> ${activityProgress}% (${activityCompleted} dari 5 aktivitas selesai)</div><div><b>Status Aktivitas:</b> ${esc(activityStatus)}</div><div><b>Status Penilaian APK:</b> ${esc(assessmentStatus)}</div></div>
+              <h2>B. Deskripsi Capaian Kompetensi APK</h2><p>Deskripsi berikut menampilkan capaian murid pada setiap subdimensi berdasarkan tahap penilaian guru. Deskriptor mengikuti keterangan capaian pada menu Pencapaianku di Portal Murid.</p><table><thead><tr><th style="width:30%">Dimensi yang Dinilai / Subdimensi</th><th style="width:19%">Kategori</th><th>Deskripsi Capaian Murid</th></tr></thead><tbody>${reportDescriptorRows}</tbody></table>
               <h2>C. Deskripsi dan Tindak Lanjut Guru</h2><div class="note">${esc(catatan)}</div><p class="muted" style="margin-top:12px">Catatan: progres penyelesaian aktivitas berbeda dari nilai APK. Kategori capaian perlu merujuk pada penilaian guru dan bukti belajar yang tersedia.</p>
               <div class="signatures"><div class="signature"><div>Mengetahui,<br>Kepala Sekolah</div><div class="space"></div><b><u>${esc(school.principal || 'Nama Kepala Sekolah Belum Diatur')}</u></b><div class="muted">NIP: ${esc(school.principalNip || 'Belum diatur')}</div></div><div class="signature"><div>Guru ${esc(getTeacherAssignedClass() || selected.kelas || 'Kelas')}</div><div class="space"></div><b><u>${esc(school.teacherDisplayName || state.teacherAuth?.nama || state.teacherAuth?.name || 'Nama Guru Belum Diatur')}</u></b><div class="muted">NIP: ${esc(school.teacherUsername || state.teacherAuth?.nip || 'Belum diatur')}</div></div></div><div class="footer">Dokumen dibuat melalui PORTAL-SRL · ${new Date().toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'})}</div>
               <div class="no-print" style="margin-top:24px;text-align:center"><button onclick="window.print()" style="background:#059669;color:#fff;padding:10px 18px;border:0;border-radius:8px;font-weight:bold;cursor:pointer">Cetak / Simpan sebagai PDF</button></div>
