@@ -5349,6 +5349,11 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
             };
             return state.teacherDataCache.portfolioAssessment;
         }
+        // Autosave asesmen dibuat debounce dan serial. Perubahan cepat pada banyak
+        // indikator tidak lagi mengirim request Google Sheets secara bersamaan.
+        const teacherAssessmentSaveTimers = {};
+        const teacherAssessmentPendingSaves = {};
+        let teacherAssessmentSaveQueue = Promise.resolve();
         function teacherAssessmentPersist(kind, record) {
             const store=state.teacherDataCache.portfolioAssessment || {observation:{},self:{},peer:{},recap:{}};
             try { sessionStorage.setItem('portalSrlPortfolioAssessment', JSON.stringify(store)); } catch(e) {}
@@ -5364,33 +5369,40 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
                 showModal('NISN murid tidak ditemukan','Data belum dapat disinkronkan karena identitas NISN murid tidak tersedia. Periksa data murid pada Portal Guru.','warning');
                 return;
             }
-
-            const values = record.values && typeof record.values === 'object' ? record.values : {};
+            const values = record.values && typeof record.values === 'object' ? {...record.values} : {};
             const hasValue = Object.values(values).some(value => String(value == null ? '' : value).trim() !== '');
             const notes = String(record.notes || '');
             if (!hasValue && !notes.trim()) return;
-
             const payload = {
-                kind,
-                nisn,
+                kind, nisn,
                 student_id:String(record.studentId || student?.id || ''),
                 act_id:String(record.activity || (kind === 'recap' ? 'all' : '')),
-                values,
-                notes
+                values, notes
             };
-            apiCall('savePortfolioAssessment', payload).then(res => {
-                if (!res || res.status !== 'success') {
-                    console.error('Gagal menyimpan asesmen ke Google Sheets:', res && res.message);
-                    showModal('Data belum tersinkron', (res && res.message) || 'Data tersimpan sementara di perangkat ini, tetapi belum berhasil disimpan ke Google Sheets.', 'warning');
-                    return;
-                }
-                record.syncStatus = 'synced';
-                record.syncedAt = new Date().toISOString();
-                try { sessionStorage.setItem('portalSrlPortfolioAssessment', JSON.stringify(store)); } catch(e) {}
-            }).catch(err => {
-                console.error('Gagal menyimpan asesmen ke Google Sheets:', err);
-                showModal('Koneksi penyimpanan gagal','Data tersimpan sementara di perangkat ini. Coba simpan kembali saat koneksi tersedia.','warning');
-            });
+            const queueKey = `${kind}|${nisn}|${payload.act_id}`;
+            teacherAssessmentPendingSaves[queueKey] = {payload, record, store};
+            if (teacherAssessmentSaveTimers[queueKey]) clearTimeout(teacherAssessmentSaveTimers[queueKey]);
+            teacherAssessmentSaveTimers[queueKey] = setTimeout(() => {
+                delete teacherAssessmentSaveTimers[queueKey];
+                const pending = teacherAssessmentPendingSaves[queueKey];
+                delete teacherAssessmentPendingSaves[queueKey];
+                if (!pending) return;
+                teacherAssessmentSaveQueue = teacherAssessmentSaveQueue.then(() =>
+                    apiCall('savePortfolioAssessment', pending.payload)
+                ).then(res => {
+                    if (!res || res.status !== 'success') {
+                        console.error('Gagal menyimpan asesmen ke Google Sheets:', res && res.message);
+                        showModal('Data belum tersinkron', (res && res.message) || 'Data tersimpan sementara di perangkat ini, tetapi belum berhasil disimpan ke Google Sheets.','warning');
+                        return;
+                    }
+                    pending.record.syncStatus = 'synced';
+                    pending.record.syncedAt = new Date().toISOString();
+                    try { sessionStorage.setItem('portalSrlPortfolioAssessment', JSON.stringify(pending.store)); } catch(e) {}
+                }).catch(err => {
+                    console.error('Gagal menyimpan asesmen ke Google Sheets:', err);
+                    showModal('Koneksi penyimpanan gagal','Data tersimpan sementara di perangkat ini. Coba simpan kembali saat koneksi tersedia.','warning');
+                });
+            }, 650);
         }
         function teacherAssessmentSetActivity(v) {
             // Simpan filter yang dipilih secara eksplisit dan validasi nilainya.
@@ -6499,20 +6511,69 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
         function selectReportStudent(id) { reportState.selectedStudentId=String(id); renderTeacherBoard(); }
         function exportTeacherReport() { const t=document.title; document.title='Laporan Capaian Aktivitas Murid - PORTAL-SRL'; window.print(); document.title=t; }
         function exportStudentDevelopmentReport() {
-            const all = reportStudents();
-            const selected = all.find(s => Number(s.id) === Number(reportState.selectedStudentId)) || all[0];
-            if (!selected) { showModal('Data Murid Belum Tersedia', 'Belum ada data murid yang dapat dibuatkan laporan.', 'warning'); return; }
-            // Buka tab laporan segera saat klik agar tidak dianggap popup otomatis oleh browser.
-            const win = window.open('about:blank', '_blank');
-            if (!win) { showModal('Jendela Laporan Diblokir', 'Izinkan pop-up untuk PORTAL-SRL, lalu tekan tombol Unduh Laporan Murid kembali.', 'warning'); return; }
+            // Ambil capaian dari sumber data laporan yang sama dengan dashboard, bukan roster lokal.
+            const reportList = Array.isArray(reportDataCache?.listMurid) ? reportDataCache.listMurid : [];
+            const reportSelected = reportList.find(s => String(s.id ?? s.nisn) === String(reportState.selectedStudentId)) || reportList[0];
+            if (!reportSelected) { showModal('Data Murid Belum Tersedia', 'Belum ada data murid pada rekap laporan yang dapat dibuatkan PDF.', 'warning'); return; }
+            // Gabungkan metadata identitas/progres dari roster, tetapi nilai APK tetap dari rekap tersimpan.
+            // Sinkronkan identitas dan progres dari roster dengan prioritas NISN, karena ID numerik
+            // rekap APK dan roster bisa berbeda. Nilai APK tetap menggunakan sumber rekap laporan.
+            const rosterList = reportStudents();
+            const reportNisnKey = String(reportSelected.nisn || reportSelected.NISN || '').trim();
+            const rosterSelected = rosterList.find(s => reportNisnKey && String(s.nisn || s.NISN || '').trim() === reportNisnKey)
+                || rosterList.find(s => String(s.id) === String(reportSelected.id))
+                || rosterList.find(s => String(s.nama || '').trim().toLowerCase() === String(reportSelected.nama || '').trim().toLowerCase() && String(s.kelas || '') === String(reportSelected.kelas || ''))
+                || {};
+            const selected = { ...reportSelected, ...rosterSelected, ...reportSelected,
+                id: reportSelected.id, nama: reportSelected.nama || rosterSelected.nama,
+                nisn: reportSelected.nisn || reportSelected.NISN || rosterSelected.nisn || reportSelected.id };
             const school = state.teacherSettings || {};
-            const esc = value => String(value ?? '').replace(/[&<>\"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
-            const dims = [
-              {key:'penalaran',label:'Penalaran Kritis'},
-              {key:'kreativitas',label:'Kreativitas'},
-              {key:'kolaborasi',label:'Kolaborasi'}
+            const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+            // Ambil capaian per subdimensi dari rekap penilaian guru (recap),
+            // lalu gunakan deskriptor yang sama dengan menu Pencapaianku pada Portal Murid.
+            const apkSubdimensionLabels = [
+              'Penyampaian Argumentasi','Pengambilan Keputusan','Penyelesaian Masalah',
+              'Gagasan Baru','Fleksibilitas Berpikir','Karya','Peduli','Berbagi','Kerja Sama'
             ];
-            const dimRows = dims.map(d => { const value=reportScore(selected,d.key); return `<tr><td>${esc(d.label)}</td><td style="text-align:center">${value>0?value+'%':'Belum dinilai'}</td><td>${esc(value>0?reportLevel(value):'Belum dinilai')}</td></tr>`; }).join('');
+            const apkDimensionGroups = [
+              {label:'Penalaran Kritis',subs:apkSubdimensionLabels.slice(0,3)},
+              {label:'Kreativitas',subs:apkSubdimensionLabels.slice(3,6)},
+              {label:'Kolaborasi',subs:apkSubdimensionLabels.slice(6,9)}
+            ];
+            const reportApkDescriptions = {
+              'Berkembang':'Mulai menunjukkan kompetensi dan masih memerlukan latihan atau arahan.',
+              'Cakap':'Menunjukkan kompetensi sesuai harapan dalam kegiatan yang dilakukan.',
+              'Mahir':'Menunjukkan kompetensi secara mandiri, konsisten, dan dapat menerapkannya dengan baik.'
+            };
+            const reportNisn = String(selected?.nisn || selected?.NISN || selected?.id || '').trim();
+            const activityProgress = Math.max(0, Math.min(100, Number(rosterSelected.progres ?? rosterSelected.progressPercent ?? rosterSelected.progress ?? selected.progres ?? selected.progressPercent ?? selected.progress) || 0));
+            const activityCompleted = Math.round(activityProgress / 20);
+            const activityStatus = activityProgress >= 100 ? 'Selesai' : activityProgress > 0 ? 'Sedang berlangsung' : 'Belum dimulai';
+            const assessedSubdimensionCount = Object.keys(reportSubdimensionLevels).filter(k => ['Berkembang','Cakap','Mahir'].includes(String(reportSubdimensionLevels[k]||'').trim())).length;
+            const assessmentStatus = assessedSubdimensionCount >= 9 ? 'Sudah dinilai' : assessedSubdimensionCount > 0 ? `Penilaian sebagian (${assessedSubdimensionCount}/9 subdimensi)` : 'Belum dinilai';
+            const recapBucket = state.teacherDataCache?.portfolioAssessment?.recap || {};
+            const recapRecords = Object.values(recapBucket).filter(record => record &&
+              String(record.nisn || '').trim() === reportNisn &&
+              String(record.activity || record.act_id || 'all').trim().toLowerCase() === 'all');
+            let reportSubdimensionLevels = recapRecords.length
+              ? (recapRecords.sort((a,b)=>(Date.parse(b.updatedAt||'')||0)-(Date.parse(a.updatedAt||'')||0))[0].values || {})
+              : {};
+            if (!Object.keys(reportSubdimensionLevels).length) {
+              const directRecap = recapBucket[`recap_all_${reportNisn}`] || recapBucket[`recap_all_${selected?.id}`];
+              reportSubdimensionLevels = directRecap?.values || {};
+            }
+            const reportDescriptorRows = apkDimensionGroups.map(group => {
+              const groupHeader = `<tr><td colspan="3" style="background:#eaf8f1;font-weight:bold;color:#065f46">DIMENSI: ${esc(group.label)}</td></tr>`;
+              const subRows = group.subs.map(sub => {
+                const rawLevel = String(reportSubdimensionLevels[sub] || '').trim();
+                const level = rawLevel.toLowerCase() === 'berkembang' ? 'Berkembang' : rawLevel.toLowerCase() === 'cakap' ? 'Cakap' : rawLevel.toLowerCase() === 'mahir' ? 'Mahir' : '';
+                const category = level || 'Belum dinilai';
+                const description = level ? (reportApkDescriptions[level] || 'Deskripsi capaian belum tersedia.') : 'Belum ada penilaian guru yang tersimpan untuk subdimensi ini.';
+                const categoryColor = level === 'Mahir' ? '#047857' : level === 'Cakap' ? '#0369a1' : level === 'Berkembang' ? '#b45309' : '#64748b';
+                return `<tr><td style="width:30%;font-weight:bold">${esc(sub)}</td><td style="width:19%;font-weight:bold;color:${categoryColor}">${esc(category)}</td><td>${esc(description)}</td></tr>`;
+              }).join('');
+              return groupHeader + subRows;
+            }).join('');
             const logo = String(school.logoUrl || '').trim();
             const logoHtml = logo ? `<img src="${esc(logo)}" alt="Logo Sekolah" style="width:78px;height:78px;object-fit:contain">` : '';
             const catatan = selected.catatanGuru || selected.umpanBalik || 'Belum ada deskripsi atau catatan guru yang tersedia.';
@@ -6521,8 +6582,8 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
               @page{size:A4;margin:18mm}*{box-sizing:border-box}body{font-family:Arial,Helvetica,sans-serif;color:#172033;font-size:11pt;line-height:1.5;margin:0}header{display:flex;align-items:center;gap:16px;border-bottom:3px solid #059669;padding-bottom:14px;margin-bottom:20px}header .school{flex:1;text-align:center}h1{font-size:16pt;margin:0 0 4px;text-transform:uppercase}h2{font-size:13pt;color:#065f46;margin:20px 0 8px}.muted{color:#475569;font-size:9.5pt}.meta{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin:12px 0 18px}.meta div{padding:6px 0;border-bottom:1px solid #e2e8f0}table{width:100%;border-collapse:collapse;margin-top:8px}th,td{border:1px solid #cbd5e1;padding:9px;text-align:left}th{background:#ecfdf5}.note{padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;white-space:pre-wrap}.signatures{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:38px 0 0;page-break-inside:avoid}.signature{margin:0;width:auto;text-align:center;page-break-inside:avoid}.signature .space{height:68px}.footer{margin-top:28px;border-top:1px solid #cbd5e1;padding-top:8px;color:#64748b;font-size:9pt}@media print{.no-print{display:none}}</style></head><body>
               <header>${logoHtml}<div class="school"><h1>${esc(school.schoolName || 'Nama Sekolah Belum Diatur')}</h1><div>${esc(school.schoolAddress || '')}</div><div class="muted">NPSN: ${esc(school.npsn || 'Belum diatur')}</div></div></header>
               <h1 style="text-align:center;font-size:15pt;margin:8px 0 2px">LAPORAN HASIL PERKEMBANGAN KOMPETENSI MURID</h1><p style="text-align:center;margin:0">${esc(school.selectedTopik || 'Topik 2: Aku Bisa Menjaga Lingkungan')}</p><p style="text-align:center;margin:0" class="muted">Tahun Ajaran ${esc(school.schoolYear || 'Belum diatur')}</p>
-              <h2>A. Identitas Murid</h2><div class="meta"><div><b>Nama Murid:</b> ${esc(selected.nama || '-')}</div><div><b>NISN:</b> ${esc(selected.nisn || selected.NISN || '-')}</div><div><b>Kelas:</b> ${esc(selected.kelas || '-')}</div><div><b>Kelompok:</b> ${esc(selected.kelompok || '-')}</div><div><b>Progres Aktivitas:</b> ${Number(selected.progres)||0}%</div><div><b>Status:</b> ${esc(selected.status || 'Dalam proses')}</div></div>
-              <h2>B. Ringkasan Capaian APK</h2><p>Ringkasan berikut menggunakan nilai capaian yang tersedia pada data portal. Nilai yang belum ditetapkan guru ditandai “Belum dinilai”.</p><table><thead><tr><th>Dimensi Profil Lulusan</th><th style="width:25%">Nilai</th><th style="width:28%">Kategori</th></tr></thead><tbody>${dimRows}</tbody></table>
+              <h2>A. Identitas Murid</h2><div class="meta"><div><b>Nama Murid:</b> ${esc(selected.nama || '-')}</div><div><b>NISN:</b> ${esc(selected.nisn || selected.NISN || '-')}</div><div><b>Kelas:</b> ${esc(selected.kelas || '-')}</div><div><b>Kelompok:</b> ${esc(selected.kelompok || '-')}</div><div><b>Progres Aktivitas:</b> ${activityProgress}% (${activityCompleted} dari 5 aktivitas selesai)</div><div><b>Status Aktivitas:</b> ${esc(activityStatus)}</div><div><b>Status Penilaian APK:</b> ${esc(assessmentStatus)}</div></div>
+              <h2>B. Deskripsi Capaian Kompetensi APK</h2><p>Deskripsi berikut menampilkan capaian murid pada setiap subdimensi berdasarkan tahap penilaian guru. Deskriptor mengikuti keterangan capaian pada menu Pencapaianku di Portal Murid.</p><table><thead><tr><th style="width:30%">Dimensi yang Dinilai / Subdimensi</th><th style="width:19%">Kategori</th><th>Deskripsi Capaian Murid</th></tr></thead><tbody>${reportDescriptorRows}</tbody></table>
               <h2>C. Deskripsi dan Tindak Lanjut Guru</h2><div class="note">${esc(catatan)}</div><p class="muted" style="margin-top:12px">Catatan: progres penyelesaian aktivitas berbeda dari nilai APK. Kategori capaian perlu merujuk pada penilaian guru dan bukti belajar yang tersedia.</p>
               <div class="signatures"><div class="signature"><div>Mengetahui,<br>Kepala Sekolah</div><div class="space"></div><b><u>${esc(school.principal || 'Nama Kepala Sekolah Belum Diatur')}</u></b><div class="muted">NIP: ${esc(school.principalNip || 'Belum diatur')}</div></div><div class="signature"><div>Guru ${esc(getTeacherAssignedClass() || selected.kelas || 'Kelas')}</div><div class="space"></div><b><u>${esc(school.teacherDisplayName || state.teacherAuth?.nama || state.teacherAuth?.name || 'Nama Guru Belum Diatur')}</u></b><div class="muted">NIP: ${esc(school.teacherUsername || state.teacherAuth?.nip || 'Belum diatur')}</div></div></div><div class="footer">Dokumen dibuat melalui PORTAL-SRL · ${new Date().toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'})}</div>
               <div class="no-print" style="margin-top:24px;text-align:center"><button onclick="window.print()" style="background:#059669;color:#fff;padding:10px 18px;border:0;border-radius:8px;font-weight:bold;cursor:pointer">Cetak / Simpan sebagai PDF</button></div>
@@ -6561,16 +6622,9 @@ function renderStudentEvidenceUploader(actId, kind, stepNumber) {
 </style>
 
 </body></html>`;
-            try {
-                win.document.open();
-                win.document.write(doc);
-                win.document.close();
-                win.focus();
-            } catch (err) {
-                try { win.close(); } catch (_) {}
-                showModal('Laporan Gagal Dibuka', 'Laporan murid belum dapat dibuka. Silakan coba kembali.', 'warning');
-                console.error('exportStudentDevelopmentReport error:', err);
-            }
+            const win = window.open('', '_blank');
+            if (!win) { showModal('Jendela Laporan Diblokir', 'Izinkan pop-up untuk PORTAL-SRL, lalu tekan tombol Unduh Laporan Murid kembali.', 'warning'); return; }
+            win.document.open(); win.document.write(doc); win.document.close();
         }
         function renderTeacherLaporanView() {
             const dims=[['penalaranKritis','Penalaran Kritis'],['kreativitas','Kreativitas'],['kolaborasi','Kolaborasi']];
